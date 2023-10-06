@@ -11,7 +11,7 @@ Minhyeok Kang, **Weitong Li**, Roland van Rijswijk-Deij, Taekyoung "Ted" Kwon, T
 
 ## RoVista: Measuring and Understanding the Route Origin Validation (ROV) in RPKI
 **Weitong Li**, Zhexiao Lin, Mohammad Ishtiaq Ashiq Khan, Emile Aben, Romain Fontugne, Amreesh Phokeer, and Taejoong Chung.  
-ACM Internet Measurement Conference (IMC), Montréal, Canada, October 2023.
+In Proceedings of the ACM Internet Measurement Conference (IMC'23), Montreal, Canada, October 2023
 
 ## You’ve Got Report: Measurement and Security Implications of DMARC Reporting
 Mohammad Ishtiaq Ashiq Khan, **Weitong Li**, Tobias Fiebig, and Taejoong Chung.  
