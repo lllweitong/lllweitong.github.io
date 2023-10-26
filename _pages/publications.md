@@ -5,10 +5,6 @@ permalink: /publications/
 author_profile: true
 ---
 
-## Improving the Quality of Route Objects in IRR by Cross-checking RPKI and BGP announcements
-Minhyeok Kang, **Weitong Li**, Roland van Rijswijk-Deij, Taekyoung "Ted" Kwon, Taejoong Chung.  
-[Under revision] In Proceedings of the Network and Distributed System Security Symposium (NDSS'24), San Diego, USA, February 2024
-
 ## RoVista: Measuring and Understanding the Route Origin Validation (ROV) in RPKI
 **Weitong Li**, Zhexiao Lin, Mohammad Ishtiaq Ashiq Khan, Emile Aben, Romain Fontugne, Amreesh Phokeer, and Taejoong Chung.  
 In Proceedings of the ACM Internet Measurement Conference (IMC'23), Montreal, Canada, October 2023
