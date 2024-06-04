@@ -15,7 +15,7 @@ My current research interests are Internet measurement and routing security.
 
 News
 ===
-+ [04/2024] I will join CablesLab this summer.
++ [04/2024] I will join CableLabs this summer.
 + [03/2024] Our SPF paper is accepted to Usenix'24.
 + [12/2023] Our IRRedicator paper is accepted to NDSS'24
 + [10/2023] Our ROVista paper is accepted to IMC'23.
