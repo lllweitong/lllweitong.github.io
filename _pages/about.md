@@ -16,6 +16,6 @@ My current research interests are Internet measurement and routing security.
 News
 ===
 + [12/2024] Our ImpROV paper is accepted to Usenix'25.
-+ [09/2024] I received the Pratt Fellowship  from Department of Computer Science at VT.
++ [09/2024] I received the Pratt Fellowship from Department of Computer Science at VT.
 + [04/2024] I will join CableLabs this summer.
 + [03/2024] Our SPF paper is accepted to Usenix'24.
