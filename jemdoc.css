@@ -235,6 +235,11 @@ li.pub:not(:last-child) {
     margin-bottom: 1.5em;
 }
 
+span.venue-label {
+    color: #527bbd;
+    font-weight: normal;
+}
+
 li.news:not(:last-child) {
     margin-bottom: 0.5em;
 }
