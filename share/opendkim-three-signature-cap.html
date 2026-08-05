@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>OpenDKIM evaluates only the first three DKIM signatures, so three prepended signatures bury a valid aligned one and DMARC fails (OpenDKIM &lt;= 2.11.0 and OpenDMARC ≤ 1.4.2)</title>
+<style>
+:root { color-scheme: light dark; --fg:#111; --bg:#fff; --muted:#555; --rule:#ddd; --pre:#f5f5f5; --link:#14508c; }
+@media (prefers-color-scheme: dark) {
+  :root { --fg:#e4e4e4; --bg:#161616; --muted:#a0a0a0; --rule:#333; --pre:#1e1e1e; --link:#7fb2e5; }
+}
+body { max-width: 46rem; margin: 2.5rem auto; padding: 0 1.1rem 4rem; background: var(--bg); color: var(--fg);
+       font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+h1 { font-size: 1.35rem; line-height: 1.35; margin: 0 0 1rem; }
+h2 { font-size: 1.05rem; margin: 2rem 0 .6rem; }
+p, li { margin: .6rem 0; }
+a { color: var(--link); }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .87em; }
+pre { background: var(--pre); border: 1px solid var(--rule); padding: .75rem .85rem; overflow-x: auto;
+      font-size: .82rem; line-height: 1.45; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+table { border-collapse: collapse; width: 100%; font-size: .87rem; margin: .7rem 0; }
+th, td { border: 1px solid var(--rule); padding: .35rem .5rem; text-align: left; vertical-align: top; }
+.scroll { overflow-x: auto; }
+.hdr { font-size: .93rem; color: var(--muted); margin: 0 0 1.6rem; }
+.hdr b { color: var(--fg); font-weight: 600; }
+.lead { border-left: 3px solid var(--rule); padding-left: .85rem; margin: 0 0 1.6rem; }
+footer { margin-top: 3rem; padding-top: .8rem; border-top: 1px solid var(--rule);
+         color: var(--muted); font-size: .84rem; }
+</style>
+</head>
+<body>
+
+<h1>OpenDKIM evaluates only the first three DKIM signatures, so three prepended signatures bury a valid aligned one and DMARC fails (OpenDKIM &lt;= 2.11.0 and OpenDMARC ≤ 1.4.2)</h1>
+
+<p class="hdr">
+<b>Author:</b> <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech &lt;weitongli@vt.edu&gt;<br>
+<b>Date:</b> 2026-07-31<br>
+<b>Vendor:</b> <a href="http://www.trusteddomain.org/">The Trusted Domain Project</a><br>
+<b>Software:</b> <a href="http://www.opendkim.org/">OpenDKIM (feeding OpenDMARC)</a><br>
+<b>Affected version:</b> OpenDKIM 2.11.0 (Debian package <code>2.11.0~beta2-9.1+b1</code>). Evaluated in a milter chain with OpenDMARC 1.4.2. The laboratory configuration sets no signature-limit directive of any kind, so the cap observed is the default behaviour of the release.<br>
+<b>Vulnerable component:</b> DKIM multi-signature evaluation — the positional cap on how many <code>DKIM-Signature</code> header fields are verified<br>
+<b>Vulnerability type:</b> CWE-755 (Improper Handling of Exceptional Conditions) leading to denial of validation<br>
+<b>Attack vector:</b> Remote. The attacker needs a position from which header fields can be prepended to the victim's message — a relaying or forwarding hop, a mailing list, or a machine-in-the-middle — together with a valid DKIM key for a throwaway domain of their own. A benign chain that simply accumulates signatures reaches the same state with no attacker at all.<br>
+<b>CVSS v3.1:</b> 7.5 (High) &mdash; <code>CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H</code><br>
+<b>Status:</b> Reproduced on 2026-07-28 against the current release (run <code>20260728-120957</code>) with a scripted reproducer, negative controls, and a second independent implementation as the differential oracle. A positional cutoff probe in which the valid signature is byte-identical in every row, an amended probe using cryptographically valid prefix signatures, and an independent dkimpy check confirming that the buried signature is both valid and aligned.
+</p>
+
+<p class="lead"><b>Impact.</b> An attacker holding a valid key for a throwaway domain prepends three signatures, pushing the victim's own aligned signature out of the evaluated window, and OpenDMARC returns dmarc=fail under the victim's p=reject.</p>
+
+<h2>Description</h2>
+<p>This is an attacker-triggerable denial of validation, and it fails closed. Under the victim's own <code>p=reject</code> with <code>RejectFailures</code> enabled, the victim's genuine, correctly signed mail is rejected or quarantined at every OpenDMARC receiver, while Rspamd-class and Gmail-class receivers deliver it.</p>
+<p>The cost to the attacker is low. Because the cap counts cryptographically valid signatures, no malformed-header craft is required and no key of the victim's is needed: a valid DKIM key for a domain the attacker registers is sufficient. <code>DKIM-Signature</code> fields are prepended at the top of the header block and DKIM is explicitly designed to survive intermediary hops, so any relaying position suffices to add them.</p>
+<p>The suppression is silent in both directions. The sender sees ordinary delivery failures and the receiving operator sees an apparently legitimate <code>dmarc=fail</code>, so neither party has a signal pointing at the cap. The same state is reached accidentally by benign chains that accumulate an author signature plus several forwarder or list re-signatures.</p>
+<p>RFC 7489 section 6.6.2 evaluates DMARC over the authenticated identifiers described in section 3.1.1: the message passes if <em>any</em> DKIM signature both verifies and is aligned with the RFC5322.From domain. A message may legitimately carry several <code>DKIM-Signature</code> header fields — multiple selectors, a forwarder re-signing, a list re-signing — and RFC 6376 section 6.1 expects a verifier to work through them.</p>
+<p>OpenDKIM evaluates only the first three. A valid, aligned signature sitting at position four or lower is never checked; OpenDKIM stamps it <code>dkim=neutral</code>, which means unevaluated rather than invalid, and OpenDMARC consequently returns <code>dmarc=fail</code> even though a perfectly good aligned signature is present in the message. Rspamd evaluates further and returns <code>dmarc=pass</code> on the identical bytes.</p>
+<p>The first probe prepends <code>k</code> broken aligned signatures ahead of one valid aligned signature. The valid signature is identical in every row; only the number of signatures ahead of it changes:</p>
+<div class="scroll">
+<table>
+<tr><th>Layout, top to bottom</th><th>Total signatures</th><th>OpenDMARC</th><th>Rspamd</th></tr>
+<tr><td>valid</td><td>1</td><td>pass</td><td>pass</td></tr>
+<tr><td>broken, valid</td><td>2</td><td>pass</td><td>pass</td></tr>
+<tr><td>broken × 2, valid</td><td>3</td><td>pass</td><td>pass</td></tr>
+<tr><td><strong>broken × 3, valid</strong></td><td><strong>4</strong></td><td><strong>fail</strong></td><td>pass</td></tr>
+<tr><td>broken × 4, valid</td><td>5</td><td><strong>fail</strong></td><td>pass</td></tr>
+<tr><td>broken × 5, valid</td><td>6</td><td><strong>fail</strong></td><td>pass</td></tr>
+<tr><td>broken × 6, valid</td><td>7</td><td>fail</td><td>fail (Rspamd's own higher cap)</td></tr>
+</table>
+</div>
+<p>The flip happens exactly when the valid signature becomes the fourth. With the valid signature first and the broken ones after it, OpenDMARC passes, so the behaviour is positional rather than content-dependent: only the first three signatures are evaluated.</p>
+<p>A second probe establishes the point that matters for exploitability. The cap counts <em>cryptographically valid</em> signatures, not merely malformed ones, so the prefix can be built from signatures the attacker makes with a key of their own. The victim publishes <code>p=reject</code> and carries its own valid aligned signature; the prefix signatures are valid and unaligned, for a domain the attacker controls:</p>
+<div class="scroll">
+<table>
+<tr><th>Valid unaligned prefix signatures</th><th>Position of the victim's aligned signature</th><th>OpenDMARC</th><th>Rspamd</th></tr>
+<tr><td>2</td><td>3</td><td>pass</td><td>pass</td></tr>
+<tr><td><strong>3</strong></td><td><strong>4</strong></td><td><strong>fail</strong></td><td>pass</td></tr>
+<tr><td>4</td><td>5</td><td><strong>fail</strong></td><td>pass</td></tr>
+</table>
+</div>
+<p>The Authentication-Results the chain writes for the three-prefix case records the mechanism directly. The attacker's own signatures are validated and the victim's is not evaluated at all:</p>
+<pre><code>dkim=pass     header.d=evilcorp     (three times, the attacker's own valid signatures)
+dkim=neutral  header.d=victbank header.s=vsel    &lt;- the victim's valid, aligned signature
+dmarc=fail (p=reject)</code></pre>
+<p>The buried signature is reported <code>neutral</code>, that is unevaluated, and not validation-failed, which confirms a positional cap rather than a cryptographic failure. dkimpy verifies the same buried signature as valid and aligned.</p>
+
+<h2>Proof of Concept</h2>
+<p>Publish, for a victim domain and for a throwaway domain the attacker owns:</p>
+<pre><code>_dmarc.victbank.example.            IN TXT "v=DMARC1; p=reject; adkim=s; aspf=s"
+vsel._domainkey.victbank.example.   IN TXT "v=DKIM1; k=rsa; p=&lt;victim public key&gt;"
+esel._domainkey.evilcorp.example.   IN TXT "v=DKIM1; k=rsa; p=&lt;attacker public key&gt;"</code></pre>
+<p>Take a genuine message from the victim, correctly signed and aligned, and prepend three valid signatures made with the attacker's own key above the victim's:</p>
+<pre><code>DKIM-Signature: v=1; a=rsa-sha256; d=evilcorp.example; s=esel; ...   &lt;- attacker, valid
+DKIM-Signature: v=1; a=rsa-sha256; d=evilcorp.example; s=esel; ...   &lt;- attacker, valid
+DKIM-Signature: v=1; a=rsa-sha256; d=evilcorp.example; s=esel; ...   &lt;- attacker, valid
+DKIM-Signature: v=1; a=rsa-sha256; d=victbank.example; s=vsel; ...   &lt;- the victim's own
+From: ceo@victbank.example
+To: user@receiver.test
+Subject: statement</code></pre>
+<p>Required under RFC 7489 section 6.6.2: the victim's aligned signature verifies, so the verdict is <code>dmarc=pass</code>. Observed on the OpenDKIM and OpenDMARC chain: the victim's signature is stamped <code>dkim=neutral</code> and the verdict is <code>dmarc=fail (p=reject)</code>. Rspamd on the identical message returns <code>dmarc=pass</code>. Removing one of the three prefix signatures restores <code>dmarc=pass</code> on OpenDMARC, which is the control that isolates the position as the only variable.</p>
+
+<h2>Mitigation</h2>
+<p>Do not abandon unexamined signatures in a way that changes the DMARC verdict. If a bound on the work done per message is retained as a denial-of-service defence, it should be set well above the number of signatures legitimate multi-hop mail accumulates, it should not stop at the first three, and signatures that fail to verify should not consume budget that a later valid signature needs.</p>
+<p>Two secondary points. Whether the cap can be raised by configuration was not established, and if such a directive exists it should be documented alongside its DMARC consequence. Separately, a signature abandoned because a cap was reached should not be reported with the same <code>neutral</code> token used for other unevaluated cases without any indication that the verifier chose not to look at it, since that removes the only diagnostic a receiving operator could act on.</p>
+
+<h2>Notes</h2>
+<p>Scoped honestly: this is not a spoof and gives an attacker no way to have a forged message accepted. It suppresses legitimate mail. The direction is fail-closed throughout, and the entry is filed as a denial of validation for that reason.</p>
+<p>Rspamd also has a cap, reached at seven signatures in the first probe, so the existence of a cap is not in itself the defect. The defect is that OpenDKIM's is three, that valid signatures beyond it change the DMARC verdict, and that the abandoned signature is reported as though it had been considered.</p>
+<p>Two single-shot artefacts observed during the work were discarded because they did not survive three repetitions: a DNS time-to-live race in which OpenDKIM's resolver had not yet seen a freshly published key, and a folded-header truncation caused by naive duplication of a signature. Neither contributes to the result above.</p>
+<p>This is the multi-signature analogue of the early-stop pattern seen elsewhere in this series, in which a verifier stops before reaching an input a conforming verifier would have used.</p>
+
+<h2>References</h2>
+<ul>
+<li><a href="https://www.rfc-editor.org/rfc/rfc7489#section-3.1.1">RFC 7489 section 3.1.1 - DKIM-Authenticated Identifiers</a></li>
+<li><a href="https://www.rfc-editor.org/rfc/rfc7489#section-6.6.2">RFC 7489 section 6.6.2 - Determine Handling Policy</a></li>
+<li><a href="https://www.rfc-editor.org/rfc/rfc6376#section-6.1">RFC 6376 section 6.1 - Extract Signatures from the Message</a></li>
+<li><a href="https://cwe.mitre.org/data/definitions/755.html">CWE-755: Improper Handling of Exceptional Conditions</a></li>
+<li><a href="https://github.com/trusteddomainproject/OpenDKIM">OpenDKIM repository</a></li>
+<li><a href="https://weitongli.com/">Weitong Li, Virginia Tech - researcher homepage</a></li>
+</ul>
+
+<footer>
+<p>Reported by <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech
+(<a href="mailto:weitongli@vt.edu">weitongli@vt.edu</a>).
+Reproduction environment and full evidence available to the vendor on request.
+CVSS is the researcher's own assessment.</p>
+</footer>
+
+</body>
+</html>

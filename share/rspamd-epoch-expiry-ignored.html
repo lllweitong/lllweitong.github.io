@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Rspamd treats a DKIM signature expiry of x=0 as no expiration, so a signature expired at the Unix epoch still verifies (Rspamd ≤ 4.1.2)</title>
+<style>
+:root { color-scheme: light dark; --fg:#111; --bg:#fff; --muted:#555; --rule:#ddd; --pre:#f5f5f5; --link:#14508c; }
+@media (prefers-color-scheme: dark) {
+  :root { --fg:#e4e4e4; --bg:#161616; --muted:#a0a0a0; --rule:#333; --pre:#1e1e1e; --link:#7fb2e5; }
+}
+body { max-width: 46rem; margin: 2.5rem auto; padding: 0 1.1rem 4rem; background: var(--bg); color: var(--fg);
+       font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+h1 { font-size: 1.35rem; line-height: 1.35; margin: 0 0 1rem; }
+h2 { font-size: 1.05rem; margin: 2rem 0 .6rem; }
+p, li { margin: .6rem 0; }
+a { color: var(--link); }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .87em; }
+pre { background: var(--pre); border: 1px solid var(--rule); padding: .75rem .85rem; overflow-x: auto;
+      font-size: .82rem; line-height: 1.45; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+table { border-collapse: collapse; width: 100%; font-size: .87rem; margin: .7rem 0; }
+th, td { border: 1px solid var(--rule); padding: .35rem .5rem; text-align: left; vertical-align: top; }
+.scroll { overflow-x: auto; }
+.hdr { font-size: .93rem; color: var(--muted); margin: 0 0 1.6rem; }
+.hdr b { color: var(--fg); font-weight: 600; }
+.lead { border-left: 3px solid var(--rule); padding-left: .85rem; margin: 0 0 1.6rem; }
+footer { margin-top: 3rem; padding-top: .8rem; border-top: 1px solid var(--rule);
+         color: var(--muted); font-size: .84rem; }
+</style>
+</head>
+<body>
+
+<h1>Rspamd treats a DKIM signature expiry of x=0 as no expiration, so a signature expired at the Unix epoch still verifies (Rspamd ≤ 4.1.2)</h1>
+
+<p class="hdr">
+<b>Author:</b> <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech &lt;weitongli@vt.edu&gt;<br>
+<b>Date:</b> 2026-07-31<br>
+<b>Vendor:</b> <a href="https://rspamd.com/">Rspamd project (Vsevolod Stakhov)</a><br>
+<b>Software:</b> <a href="https://github.com/rspamd/rspamd">Rspamd</a><br>
+<b>Affected version:</b> Rspamd 4.1.2. Originally isolated on 3.10.2 and re-confirmed on 4.1.2 on 2026-07-28. dkimpy 1.1.8 handles the same signature correctly.<br>
+<b>Vulnerable component:</b> DKIM signature expiration — the <code>x=</code> tag of RFC 6376 section 3.5 and the expiry comparison performed at verification<br>
+<b>Vulnerability type:</b> CWE-347 (Improper Verification of Cryptographic Signature) / CWE-20 (Improper Input Validation)<br>
+<b>Attack vector:</b> Remote, but only in the direction the signed scope permits: <code>x=</code> is covered by <code>b=</code>, so the value must have been chosen by the original signer.<br>
+<b>CVSS v3.1:</b> 3.7 (Low) &mdash; <code>CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:L/A:N</code><br>
+<b>Status:</b> Reproduced on 2026-07-28 against the current release (run <code>20260728-120957</code>) with a scripted reproducer, negative controls, and a second independent implementation as the differential oracle. Confirmed against dkimpy as the differential oracle, with the neighbouring past values, the future values, and the <code>t=</code>-present, <code>t=</code>-absent and <code>x&lt;t</code> variants all exercised.
+</p>
+
+<p class="lead"><b>Impact.</b> A signature carrying x=0, which expired on 1 January 1970, passes on Rspamd as though the tag were absent, while dkimpy correctly reports it as past.</p>
+
+<h2>Description</h2>
+<p>For a signature carrying <code>x=0</code>, the DKIM validity window never closes on Rspamd. The same wire message continues to pass Rspamd-based filtering indefinitely while every conforming verifier treats it as expired, which is a silent divergence in whether a message counts as DKIM-authenticated, and a defeat of the replay-window control that <code>x=</code> exists to provide.</p>
+<p>Exploitability is limited, and the limit is structural rather than incidental. The <code>x=</code> tag sits inside the signed scope, so an attacker cannot set <code>x=0</code> on somebody else's signature without invalidating <code>b=</code>. The bug bites when the <em>original signer</em> emits <code>x=0</code>, whether through an off-by-one in expiry arithmetic, an uninitialised field, or a deliberate but mistaken use of zero as a “no expiry” value. In that case Rspamd alone keeps honouring the signature for ever, including for a captured message replayed long after the signer intended it to lapse.</p>
+<p>RFC 6376 section 3.5 defines <code>x=</code> as an absolute Unix timestamp giving the signature's expiration, states that the signature is invalid if the verification time is past it, and adds that a signature whose <code>x=</code> is less than its <code>t=</code> is invalid on that ground as well. The value is an ordinary integer; the specification defines no sentinel meaning for zero.</p>
+<p>Rspamd treats <code>x=0</code> as though the tag were unset, guarding the expiry comparison with a test for a non-zero value. A signature that expired at the Unix epoch is therefore accepted as current, and returns <code>R_DKIM_ALLOW</code>. dkimpy rejects the same signature with <code>ValidationError: x= value is past (b'0')</code>.</p>
+<p>Only the <code>x=</code> value varies across the sweep:</p>
+<div class="scroll">
+<table>
+<tr><th>Signature <code>x=</code></th><th>Rspamd</th><th>dkimpy</th><th>Required</th></tr>
+<tr><td><code>0</code> (the Unix epoch, long past)</td><td><strong><code>R_DKIM_ALLOW</code> — treated as unset</strong></td><td><code>ValidationError: x= value is past (b'0')</code></td><td>fail</td></tr>
+<tr><td><code>1</code> through <code>now − 60</code> (any other past value)</td><td>suppressed as expired</td><td>expired</td><td>fail</td></tr>
+<tr><td><code>now + 60</code> and later (future)</td><td>pass</td><td>pass</td><td>pass</td></tr>
+</table>
+</div>
+<p>The second row is what turns the observation into a bug claim rather than a general absence of expiry checking. Rspamd does implement the expiry comparison and does suppress every other past timestamp, including the value <code>1</code>, one second later than the failing case. Only zero is exempt, which points at a zero-guard around the comparison rather than a missing comparison.</p>
+<p>The result is robust across the surrounding variations. It holds with <code>t=</code> present, with <code>t=</code> absent, and in the <code>x &lt; t</code> configuration, where the test signature carried <code>x=0</code> alongside <code>t=1781531772</code> and is therefore invalid twice over under section 3.5. No Y2038-style wrap was observed on Rspamd: <code>x=2^31</code> and <code>x=2^32</code> are accepted as far-future values, as they should be, and values at or above <code>2^63</code> are dropped. dkimpy uses arbitrary-precision integers throughout and shows no boundary effect at all.</p>
+
+<h2>Proof of Concept</h2>
+<p>Publish an ordinary key record:</p>
+<pre><code>sel._domainkey.signer.example.  IN TXT "v=DKIM1; k=rsa; p=&lt;base64 RSA public key&gt;"</code></pre>
+<p>Sign the message with the matching private key, with an expiry at the Unix epoch. Both <code>t=</code> and <code>x=</code> are inside the DKIM-Signature header field and are therefore covered by <code>b=</code>:</p>
+<pre><code>DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=signer.example; s=sel;
+    t=1781531772; x=0; h=from:to:subject:date; bh=&lt;body hash&gt;; b=&lt;signature&gt;</code></pre>
+<p>Required under RFC 6376 section 3.5: the verification time is past <code>x=0</code>, and <code>x</code> is additionally less than <code>t</code>, so the signature is invalid on two counts. Observed on Rspamd: <code>R_DKIM_ALLOW</code>. Observed on dkimpy: <code>ValidationError: x= value is past (b'0')</code>.</p>
+<p>Re-sign with <code>x=1</code> and Rspamd suppresses the signature as expired, which isolates the value zero as the whole of the divergence.</p>
+
+<h2>Mitigation</h2>
+<p>Treat <code>x=0</code> as the past timestamp it is, not as a sentinel for an absent tag. The distinction the verifier needs is between an <code>x=</code> tag that is present and one that is absent, which is a question about the tag list and not about the value, so the zero guard around the expiry comparison should be removed. Independently, enforce the section 3.5 rule that a signature with <code>x</code> less than <code>t</code> is invalid, which would also catch this case.</p>
+
+<h2>Notes</h2>
+<p>The differential oracle for this finding is dkimpy. OpenDKIM was not exercised on the <code>x=</code> vein, so no claim is made here about its handling of an epoch expiry.</p>
+<p>The zero-guard described above is inferred from the behaviour, in that every other past value is suppressed and only zero is exempt. The corresponding code in Rspamd's DKIM module has not been identified, and confirming it upstream remains an open step. No line number or function is asserted.</p>
+<p>Distinct from the other DKIM entries in this group, which concern key-record tags. This one is a signature tag, <code>x=</code>, in section 3.5, and no other finding in the set covers signature expiration.</p>
+
+<h2>References</h2>
+<ul>
+<li><a href="https://www.rfc-editor.org/rfc/rfc6376#section-3.5">RFC 6376 section 3.5 - The DKIM-Signature Header Field (the x= expiration tag)</a></li>
+<li><a href="https://www.rfc-editor.org/rfc/rfc6376#section-6.1">RFC 6376 section 6.1 - Extract Signatures from the Message</a></li>
+<li><a href="https://cwe.mitre.org/data/definitions/347.html">CWE-347: Improper Verification of Cryptographic Signature</a></li>
+<li><a href="https://cwe.mitre.org/data/definitions/20.html">CWE-20: Improper Input Validation</a></li>
+<li><a href="https://rspamd.com/">Rspamd</a></li>
+<li><a href="https://weitongli.com/">Weitong Li, Virginia Tech - researcher homepage</a></li>
+</ul>
+
+<footer>
+<p>Reported by <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech
+(<a href="mailto:weitongli@vt.edu">weitongli@vt.edu</a>).
+Reproduction environment and full evidence available to the vendor on request.
+CVSS is the researcher's own assessment.</p>
+</footer>
+
+</body>
+</html>

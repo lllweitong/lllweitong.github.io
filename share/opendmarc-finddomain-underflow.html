@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>OpenDMARC one-byte stack-buffer underflow in opendmarc_util_finddomain() (OpenDMARC ≤ 1.4.2)</title>
+<style>
+:root { color-scheme: light dark; --fg:#111; --bg:#fff; --muted:#555; --rule:#ddd; --pre:#f5f5f5; --link:#14508c; }
+@media (prefers-color-scheme: dark) {
+  :root { --fg:#e4e4e4; --bg:#161616; --muted:#a0a0a0; --rule:#333; --pre:#1e1e1e; --link:#7fb2e5; }
+}
+body { max-width: 46rem; margin: 2.5rem auto; padding: 0 1.1rem 4rem; background: var(--bg); color: var(--fg);
+       font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+h1 { font-size: 1.35rem; line-height: 1.35; margin: 0 0 1rem; }
+h2 { font-size: 1.05rem; margin: 2rem 0 .6rem; }
+p, li { margin: .6rem 0; }
+a { color: var(--link); }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .87em; }
+pre { background: var(--pre); border: 1px solid var(--rule); padding: .75rem .85rem; overflow-x: auto;
+      font-size: .82rem; line-height: 1.45; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+table { border-collapse: collapse; width: 100%; font-size: .87rem; margin: .7rem 0; }
+th, td { border: 1px solid var(--rule); padding: .35rem .5rem; text-align: left; vertical-align: top; }
+.scroll { overflow-x: auto; }
+.hdr { font-size: .93rem; color: var(--muted); margin: 0 0 1.6rem; }
+.hdr b { color: var(--fg); font-weight: 600; }
+.lead { border-left: 3px solid var(--rule); padding-left: .85rem; margin: 0 0 1.6rem; }
+footer { margin-top: 3rem; padding-top: .8rem; border-top: 1px solid var(--rule);
+         color: var(--muted); font-size: .84rem; }
+</style>
+</head>
+<body>
+
+<h1>OpenDMARC one-byte stack-buffer underflow in opendmarc_util_finddomain() (OpenDMARC ≤ 1.4.2)</h1>
+
+<p class="hdr">
+<b>Author:</b> <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech &lt;weitongli@vt.edu&gt;<br>
+<b>Date:</b> 2026-07-31<br>
+<b>Vendor:</b> <a href="http://www.trusteddomain.org/">The Trusted Domain Project</a><br>
+<b>Software:</b> <a href="https://github.com/trusteddomainproject/OpenDMARC">OpenDMARC (libopendmarc)</a><br>
+<b>Affected version:</b> OpenDMARC 1.4.2 and earlier, and current upstream <code>master</code> (commit <code>bf37d53</code>).<br>
+<b>Vulnerable component:</b> <code>libopendmarc/opendmarc_util.c</code>, <code>opendmarc_util_finddomain()</code> line 278, called from <code>opendmarc_policy_store_from_domain()</code><br>
+<b>Vulnerability type:</b> CWE-125 (Out-of-bounds Read)<br>
+<b>Attack vector:</b> Remote in the library. In the shipped milter the From parser guards this vector, so direct remote reachability is not established.<br>
+<b>CVSS v3.1:</b> 4.8 (Medium) &mdash; <code>CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:N/A:L</code><br>
+<b>Status:</b> AddressSanitizer-confirmed in the library with a two-byte proof of concept. Not demonstrated through the shipped milter.
+</p>
+
+<p class="lead"><b>Impact.</b> A From header that normalises to the empty string makes the domain finder read one byte before its stack array.</p>
+
+<h2>Description</h2>
+<p>A single-byte read before a stack array. On a normal build it reads an adjacent stack byte and usually does not fault; under AddressSanitizer, a hardened allocator, or an unlucky stack layout it faults, giving a denial of service. It is undefined behaviour in every case.</p>
+<p><code>opendmarc_util_finddomain()</code> copies the From value into a stack buffer and normalises it by stripping quotes and truncating at an unquoted comma. If that normalisation empties the buffer, the following backwards scan for <code>&lt;</code> starts at <code>copy - 1</code>, its loop condition <code>b &gt; copy</code> is false immediately, and the post-loop <code>if (*b == '&lt;')</code> reads one byte before the array.</p>
+<pre><code>u_char copy[BUFSIZ];
+...
+for (cp = copy; *cp != '\0'; ++cp)
+{
+    ...
+    if (numquotes == 0 &amp;&amp; *cp == ',')   /* empties copy when the comma is first */
+    {
+        *cp = '\0';
+        break;
+    }
+    ...
+}
+ep = copy + strlen((char *) copy);      /* ep == copy when copy is now "" */
+for (b = ep - 1; b &gt; copy; --b)         /* b = copy - 1; the body never runs */
+{
+    if (*b == '&lt;')
+        break;
+}
+if (*b == '&lt;')                          /* line 278 - dereferences copy[-1] */</code></pre>
+<pre><code>==ERROR== AddressSanitizer: stack-buffer-underflow
+READ of size 1 at 0x... offset 31
+    ... underflows this variable 'copy'
+    #0 opendmarc_util_finddomain opendmarc_util.c:278</code></pre>
+<p>The caller's only guard is <code>strlen(from_domain) == 0</code> in <code>opendmarc_policy_store_from_domain()</code>. That rejects an input that is already empty, but not a non-empty input such as <code>","</code> that <em>becomes</em> empty inside <code>finddomain</code>.</p>
+
+<h2>Proof of Concept</h2>
+<p>The harness input format is <code>&lt;dmarc-record&gt;\0&lt;from-domain&gt;</code>. The minimal trigger is two bytes: an empty record and a From domain of <code>,</code>.</p>
+<pre><code>printf '\0,' &gt; pocA
+./fuzz_odmarc_record pocA
+==ERROR== AddressSanitizer: stack-buffer-underflow ... READ of size 1
+          ... in opendmarc_util_finddomain opendmarc_util.c:278</code></pre>
+<p>The equivalent library-level input is a From value of <code>,</code>, or any value that the comment- and quote-stripping reduces to the empty string.</p>
+
+<h2>Mitigation</h2>
+<pre><code> ep = copy + strlen((char *) copy);
+ b = ep - 1;
+ for (; b &gt; copy; --b)
+ {
+     if (*b == '&lt;')
+         break;
+ }
+-if (*b == '&lt;')
++if (b &gt;= copy &amp;&amp; *b == '&lt;')     /* or: if (ep &gt; copy &amp;&amp; *b == '&lt;') */</code></pre>
+<p>Do not dereference <code>b</code> when the working buffer is empty.</p>
+
+<h2>Notes</h2>
+<p><strong>Honest scoping.</strong> This is confirmed in <code>libopendmarc</code> through the direct library entry point. The milter's own From parser guards the vector before this function is reached, so a remotely delivered message was not shown to reach it. The finding is therefore best treated as a library-level defect affecting third-party consumers of <code>libopendmarc</code>, with the milter path unproven. Rated accordingly.</p>
+
+<h2>References</h2>
+<ul>
+<li><a href="https://www.rfc-editor.org/rfc/rfc5322#section-3.6.2">RFC 5322 section 3.6.2 - the From field</a></li>
+<li><a href="https://www.rfc-editor.org/rfc/rfc7489#section-6.6.1">RFC 7489 section 6.6.1 - extracting the Author Domain</a></li>
+<li><a href="https://cwe.mitre.org/data/definitions/125.html">CWE-125: Out-of-bounds Read</a></li>
+<li><a href="https://github.com/trusteddomainproject/OpenDMARC">OpenDMARC repository</a></li>
+<li><a href="https://weitongli.com/">Weitong Li, Virginia Tech - researcher homepage</a></li>
+</ul>
+
+<footer>
+<p>Reported by <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech
+(<a href="mailto:weitongli@vt.edu">weitongli@vt.edu</a>).
+Reproduction environment and full evidence available to the vendor on request.
+CVSS is the researcher's own assessment.</p>
+</footer>
+
+</body>
+</html>

@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Postfix accepts a MAIL FROM containing two unquoted at-signs and commits the envelope domain taken from the last one, where Exim and OpenSMTPD reject the command (Postfix ≤ 3.10.12)</title>
+<style>
+:root { color-scheme: light dark; --fg:#111; --bg:#fff; --muted:#555; --rule:#ddd; --pre:#f5f5f5; --link:#14508c; }
+@media (prefers-color-scheme: dark) {
+  :root { --fg:#e4e4e4; --bg:#161616; --muted:#a0a0a0; --rule:#333; --pre:#1e1e1e; --link:#7fb2e5; }
+}
+body { max-width: 46rem; margin: 2.5rem auto; padding: 0 1.1rem 4rem; background: var(--bg); color: var(--fg);
+       font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+h1 { font-size: 1.35rem; line-height: 1.35; margin: 0 0 1rem; }
+h2 { font-size: 1.05rem; margin: 2rem 0 .6rem; }
+p, li { margin: .6rem 0; }
+a { color: var(--link); }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .87em; }
+pre { background: var(--pre); border: 1px solid var(--rule); padding: .75rem .85rem; overflow-x: auto;
+      font-size: .82rem; line-height: 1.45; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+table { border-collapse: collapse; width: 100%; font-size: .87rem; margin: .7rem 0; }
+th, td { border: 1px solid var(--rule); padding: .35rem .5rem; text-align: left; vertical-align: top; }
+.scroll { overflow-x: auto; }
+.hdr { font-size: .93rem; color: var(--muted); margin: 0 0 1.6rem; }
+.hdr b { color: var(--fg); font-weight: 600; }
+.lead { border-left: 3px solid var(--rule); padding-left: .85rem; margin: 0 0 1.6rem; }
+footer { margin-top: 3rem; padding-top: .8rem; border-top: 1px solid var(--rule);
+         color: var(--muted); font-size: .84rem; }
+</style>
+</head>
+<body>
+
+<h1>Postfix accepts a MAIL FROM containing two unquoted at-signs and commits the envelope domain taken from the last one, where Exim and OpenSMTPD reject the command (Postfix ≤ 3.10.12)</h1>
+
+<p class="hdr">
+<b>Author:</b> <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech &lt;weitongli@vt.edu&gt;<br>
+<b>Date:</b> 2026-07-31<br>
+<b>Vendor:</b> <a href="https://www.postfix.org/">The Postfix project (Wietse Venema)</a><br>
+<b>Software:</b> <a href="https://www.postfix.org/download.html">Postfix</a><br>
+<b>Affected version:</b> Postfix 3.10.12, the current release under test. The differential peers are Exim 4.96 and OpenSMTPD, both of which reject the input Postfix accepts.<br>
+<b>Vulnerable component:</b> SMTP envelope address parsing in <code>smtpd</code> — acceptance and silent rewriting of a Mailbox whose local part contains an unquoted <code>@</code><br>
+<b>Vulnerability type:</b> CWE-436 (Interpretation Conflict)<br>
+<b>Attack vector:</b> Remote, unauthenticated. One SMTP transaction with a malformed MAIL FROM argument.<br>
+<b>CVSS v3.1:</b> 4.0 (Medium) &mdash; <code>CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:C/C:N/I:L/A:N</code><br>
+<b>Status:</b> Reproduced on 2026-07-28 against the current release (run <code>20260728-120957</code>) with a scripted reproducer, negative controls, and a second independent implementation as the differential oracle. Five of five deterministic across three MTAs, with the committed envelope domain read back from the delivered message's <code>Return-Path</code>, and the Postfix acceptance independently re-confirmed on a second host.
+</p>
+
+<p class="lead"><b>Impact.</b> MAIL FROM:&lt;admin@trusted.test@sender.test&gt; is accepted with 250 and silently requoted to &lt;"admin@trusted.test"@sender.test&gt;, so SPF is keyed on sender.test while a first-at-sign parser reads trusted.test.</p>
+
+<h2>Description</h2>
+<p>An envelope-domain split across parsers. For <code>&lt;admin@trusted.test@sender.test&gt;</code>, Postfix keys the envelope — and therefore the SPF check and the SPF-aligned DMARC identity — on <code>sender.test</code>, while any component that splits on the first <code>@</code> attributes the message to <code>trusted.test</code>. In a mixed chain, where Postfix sits behind or in front of a perimeter appliance, a content filter, a reputation service or a log pipeline with a different address parser, one component authorises or reputes a domain other than the one Postfix actually authenticated.</p>
+<p>The practical consequence is attribution confusion rather than a demonstrated authentication bypass: a filter that trusts <code>trusted.test</code> may exempt a message whose SPF was in fact evaluated for an unrelated domain, and logs and reports may name a domain that took no part in the authentication decision. Accepting the command at all is also a plain interoperability divergence, since messages Postfix admits are refused by Exim and OpenSMTPD.</p>
+<p>RFC 5321 section 4.1.2 defines <code>Local-part = Dot-string / Quoted-string</code>. A bare unquoted <code>@</code> is not <code>atext</code>, so <code>&lt;a@b@c.test&gt;</code> is not a legal Mailbox and the command carrying it is not a legal MAIL command.</p>
+<p>Postfix accepts it with <code>250</code>. It resolves the ambiguity by taking the <em>last</em> <code>@</code> as the delimiter, quotes the prefix, and commits the envelope sender as <code>&lt;"a@b"@c.test&gt;</code> — envelope domain <code>c.test</code>. Exim replies <code>501</code> and OpenSMTPD <code>553</code>. Exim's error text names the defect class precisely: <em>“malformed address: @c.test&gt; may not follow &lt;a@b”</em>.</p>
+<p>The same raw MAIL FROM bytes were offered to each MTA, and Postfix's committed envelope domain was read back from the <code>Return-Path</code> of the delivered message:</p>
+<div class="scroll">
+<table>
+<tr><th><code>MAIL FROM</code> argument</th><th>Postfix</th><th>Exim 4.96</th><th>OpenSMTPD</th><th>Postfix's committed envelope domain</th></tr>
+<tr><td><code>&lt;a@b@c.test&gt;</code></td><td><strong>250, accepted</strong></td><td>501 “malformed address: @c.test&gt; may not follow &lt;a@b”</td><td>553 syntax error</td><td><code>c.test</code> (last <code>@</code>)</td></tr>
+<tr><td><code>&lt;admin@trusted.test@sender.test&gt;</code></td><td><strong>250</strong></td><td>501</td><td>553</td><td><code>sender.test</code> (last <code>@</code>)</td></tr>
+<tr><td><code>&lt;user@domain.test.&gt;</code> (trailing dot)</td><td>250, stripped to <code>user@domain.test</code></td><td>501</td><td>553</td><td><code>domain.test</code></td></tr>
+<tr><td><code>&lt;@domain.test&gt;</code></td><td>250, rewritten to <code>&lt;""@domain.test&gt;</code></td><td>501</td><td>553</td><td><code>domain.test</code></td></tr>
+<tr><td><code>&lt;normal@ok.test&gt;</code> (control)</td><td>250</td><td>250</td><td>250</td><td><code>ok.test</code></td></tr>
+</table>
+</div>
+<p>The control row is what makes the rest meaningful: all three MTAs accept a well-formed Mailbox, so the rejections in the other rows are specific to the malformed input and not an artefact of the transport used to deliver it. Five of five were deterministic.</p>
+<p>Two properties of Postfix's handling are worth separating. The first is leniency: it accepts a string two other widely deployed MTAs reject. The second, and the one with security relevance, is that it does not merely accept the string but silently <em>rewrites</em> it into a form whose meaning is different from the reading another parser would take, and then uses that meaning for SPF and for the DMARC SPF-aligned identity.</p>
+
+<h2>Proof of Concept</h2>
+<p>Offer the malformed command as raw bytes, so that no client library normalises it first:</p>
+<pre><code>EHLO probe.test
+MAIL FROM:&lt;admin@trusted.test@sender.test&gt;
+250 2.1.0 Ok                      &lt;- Postfix
+                                     Exim:      501 malformed address
+                                     OpenSMTPD: 553 syntax error
+RCPT TO:&lt;user@receiver.test&gt;
+DATA
+From: admin@trusted.test
+To: user@receiver.test
+Subject: invoice
+
+...
+.</code></pre>
+<p>Required under RFC 5321 section 4.1.2: the command is rejected, because the local part contains an unquoted <code>@</code> and is therefore neither a <code>Dot-string</code> nor a <code>Quoted-string</code>. Observed on Postfix: <code>250</code>, and the delivered message carries the committed envelope sender</p>
+<pre><code>Return-Path: &lt;"admin@trusted.test"@sender.test&gt;</code></pre>
+<p>so that Postfix evaluates SPF for <code>sender.test</code>. Any component in the path that splits on the first <code>@</code> instead reads <code>trusted.test</code>. That disagreement, and Postfix's committed choice of <code>sender.test</code>, is what the laboratory demonstrates.</p>
+
+<h2>Mitigation</h2>
+<p>Reject a MAIL FROM whose Mailbox contains an unquoted <code>@</code> in the local part, with a <code>501</code>, as Exim and OpenSMTPD do. That is what RFC 5321 section 4.1.2 requires and it removes the ambiguity at the point where it enters the system.</p>
+<p>If leniency is retained deliberately for compatibility, the rewriting is the part to reconsider: committing a requoted address whose domain differs from the one a first-<code>@</code> reader derives converts a malformed input into a durable disagreement between components. At a minimum the rewrite should be logged in a form that lets an operator see both readings.</p>
+
+<h2>Notes</h2>
+<p><strong>What is and is not demonstrated.</strong> The single-hop laboratory shows two things: the accept-versus-reject split across the three MTAs, and the envelope domain Postfix commits. It does not show an end-to-end exploit. Making this into a bypass requires a mixed-MTA chain in which another component reads the first <code>@</code> and acts on it, and that chain was not built or measured here. No demonstrated authentication bypass is claimed, and the severity above reflects that.</p>
+<p>A methodological note on the evidence. An ad-hoc re-verification of the Exim and OpenSMTPD rejections through a client library was confounded: that path emits a MAIL FROM in a form both MTAs reject generically, so it cannot distinguish an address-specific parse error from a generic one. The reliable evidence is the raw-byte SMTP transcript, which produced the address-specific errors quoted above, including Exim's message naming the two at-signs.</p>
+<p>Two open questions for the vendor: whether <code>smtputf8</code> or address rewriting alters the committed domain, and whether the same last-<code>@</code> rule applies on the RCPT TO side.</p>
+
+<h2>References</h2>
+<ul>
+<li><a href="https://www.rfc-editor.org/rfc/rfc5321#section-4.1.2">RFC 5321 section 4.1.2 - Command Argument Syntax (Mailbox, Local-part)</a></li>
+<li><a href="https://www.rfc-editor.org/rfc/rfc5321#section-4.1.1.2">RFC 5321 section 4.1.1.2 - MAIL (FROM)</a></li>
+<li><a href="https://www.rfc-editor.org/rfc/rfc7208#section-2.4">RFC 7208 section 2.4 - Checking Authorization (the MAIL FROM identity)</a></li>
+<li><a href="https://cwe.mitre.org/data/definitions/436.html">CWE-436: Interpretation Conflict</a></li>
+<li><a href="https://www.postfix.org/">Postfix</a></li>
+<li><a href="https://weitongli.com/">Weitong Li, Virginia Tech - researcher homepage</a></li>
+</ul>
+
+<footer>
+<p>Reported by <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech
+(<a href="mailto:weitongli@vt.edu">weitongli@vt.edu</a>).
+Reproduction environment and full evidence available to the vendor on request.
+CVSS is the researcher's own assessment.</p>
+</footer>
+
+</body>
+</html>

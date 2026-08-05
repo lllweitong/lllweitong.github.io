@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Postfix rewrites an over-long header line after the milter chain has stamped dkim=pass, so the trusted verdict covers bytes the recipient never receives (OpenDKIM &lt;= 2.11.0 and OpenDMARC &lt;= 1.4.2 and Postfix ≤ 3.10.12)</title>
+<style>
+:root { color-scheme: light dark; --fg:#111; --bg:#fff; --muted:#555; --rule:#ddd; --pre:#f5f5f5; --link:#14508c; }
+@media (prefers-color-scheme: dark) {
+  :root { --fg:#e4e4e4; --bg:#161616; --muted:#a0a0a0; --rule:#333; --pre:#1e1e1e; --link:#7fb2e5; }
+}
+body { max-width: 46rem; margin: 2.5rem auto; padding: 0 1.1rem 4rem; background: var(--bg); color: var(--fg);
+       font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+h1 { font-size: 1.35rem; line-height: 1.35; margin: 0 0 1rem; }
+h2 { font-size: 1.05rem; margin: 2rem 0 .6rem; }
+p, li { margin: .6rem 0; }
+a { color: var(--link); }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .87em; }
+pre { background: var(--pre); border: 1px solid var(--rule); padding: .75rem .85rem; overflow-x: auto;
+      font-size: .82rem; line-height: 1.45; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+table { border-collapse: collapse; width: 100%; font-size: .87rem; margin: .7rem 0; }
+th, td { border: 1px solid var(--rule); padding: .35rem .5rem; text-align: left; vertical-align: top; }
+.scroll { overflow-x: auto; }
+.hdr { font-size: .93rem; color: var(--muted); margin: 0 0 1.6rem; }
+.hdr b { color: var(--fg); font-weight: 600; }
+.lead { border-left: 3px solid var(--rule); padding-left: .85rem; margin: 0 0 1.6rem; }
+footer { margin-top: 3rem; padding-top: .8rem; border-top: 1px solid var(--rule);
+         color: var(--muted); font-size: .84rem; }
+</style>
+</head>
+<body>
+
+<h1>Postfix rewrites an over-long header line after the milter chain has stamped dkim=pass, so the trusted verdict covers bytes the recipient never receives (OpenDKIM &lt;= 2.11.0 and OpenDMARC &lt;= 1.4.2 and Postfix ≤ 3.10.12)</h1>
+
+<p class="hdr">
+<b>Author:</b> <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech &lt;weitongli@vt.edu&gt;<br>
+<b>Date:</b> 2026-07-31<br>
+<b>Vendor:</b> <a href="http://www.trusteddomain.org/">The Postfix project (Wietse Venema)</a><br>
+<b>Software:</b> <a href="http://www.opendkim.org/">Postfix, in a milter chain with OpenDKIM and OpenDMARC</a><br>
+<b>Affected version:</b> Postfix 3.10.12 in a milter chain with OpenDKIM 2.11.0 and OpenDMARC 1.4.2. The finding was originally isolated on Postfix 3.7.11. The defect is one of pipeline ordering rather than of any single component's own logic.<br>
+<b>Vulnerable component:</b> Milter pipeline ordering — the interaction between <code>smtp_line_length_limit</code> line rewriting and milter-time DKIM verification<br>
+<b>Vulnerability type:</b> CWE-367 (Time-of-check Time-of-use (TOCTOU) Race Condition)<br>
+<b>Attack vector:</b> Remote, unauthenticated, but with an abnormal precondition: the message must carry a single header line longer than 998 octets. Above approximately 2048 octets the milter rejects the message with 550, so the usable window is bounded.<br>
+<b>CVSS v3.1:</b> 4.0 (Medium) &mdash; <code>CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:C/C:N/I:L/A:N</code><br>
+<b>Status:</b> Reproduced on 2026-07-28 against the current release (run <code>20260728-120957</code>) with a scripted reproducer, negative controls, and a second independent implementation as the differential oracle. Deterministic, with signed and unsigned controls, two other MTAs as differential peers, a short-message control, an upper-bound control, and a byte-level verification split computed outside the chain.
+</p>
+
+<p class="lead"><b>Impact.</b> A header line longer than 998 octets is mutated after OpenDKIM verified it, leaving a trusted Authentication-Results: dkim=pass on a message whose signed header no longer verifies.</p>
+
+<h2>Description</h2>
+<p>Two effects, both narrow.</p>
+<p><strong>A DKIM end-to-end integrity break.</strong> DKIM exists so that a recipient can confirm that the header fields it covers arrived unaltered. Here a covered header field is altered inside the receiving infrastructure after verification, and the delivered message no longer matches the canonicalised header that was authenticated.</p>
+<p><strong>A stale trusted verdict.</strong> The Authentication-Results header bearing the receiver's own identifier says <code>dkim=pass</code> for a message whose signed header is now broken. Any downstream consumer that trusts that header without re-verifying — which is the ordinary reason the header exists — is acting on a verdict that no longer describes the message it holds.</p>
+<p>The precondition is abnormal. Header lines over 998 octets do not occur in ordinary mail, and the milter rejects beyond roughly 2048 octets, so the window is both unusual and bounded. The severity above reflects that.</p>
+<p>RFC 5321 section 4.5.3.1.6 sets the 998-octet text line limit that triggers this. Postfix inserts a single bare space (0x20) at octet 998 of any header line longer than that, under <code>smtp_line_length_limit=998</code>. The insertion is a space on one physical line, not an RFC 5322 CRLF-plus-whitespace fold, and the line remains over the limit afterwards — 1129 octets in the case measured.</p>
+<p>OpenDKIM verifies the message and stamps <code>Authentication-Results: receiver.test; dkim=pass</code> <em>before</em> that insertion happens. The delivered message carries the post-insertion header. The trusted verdict therefore describes bytes the recipient never receives, and the signature over the bytes that are delivered does not verify.</p>
+<p>The proof that OpenDKIM verified the pre-insertion bytes is byte-level and does not depend on re-verifying anything downstream. For a <code>d=victim</code>, <code>c=simple/simple</code>, aligned signed message, the identical signature verifies over the un-spaced <code>From</code> header and fails over the octet-998-spaced one:</p>
+<div class="scroll">
+<table>
+<tr><th>Header bytes the signature is checked against</th><th>Verification result</th></tr>
+<tr><td>the <code>From</code> as signed, no insertion</td><td>true</td></tr>
+<tr><td>the <code>From</code> as delivered, one space inserted at octet 998</td><td>false</td></tr>
+</table>
+</div>
+<p>Since OpenDKIM reported <code>dkim=pass</code> and the signer signed the un-spaced bytes, OpenDKIM necessarily verified the pre-insertion form. The same holds for relaxed canonicalisation, because a space injected between two non-whitespace characters survives whitespace collapsing rather than being folded away.</p>
+<p>Controls, all deterministic, separate the Postfix behaviour from the milter behaviour and bound the window:</p>
+<div class="scroll">
+<table>
+<tr><th>Control</th><th>Observation</th><th>What it establishes</th></tr>
+<tr><td>the same over-long header on an <em>unsigned</em> message</td><td>space still inserted at octet 998</td><td>the mutation is Postfix's, not OpenDKIM's</td></tr>
+<tr><td>the same over-long header through OpenSMTPD, no milters</td><td>delivered verbatim at 1128 octets, no insertion</td><td>the rewrite is specific to this MTA, not inherent to the transport</td></tr>
+<tr><td>the same over-long header through Exim</td><td>rejected</td><td>a third behaviour: refusing the input outright</td></tr>
+<tr><td>a short signed message</td><td>no insertion, <code>dkim=pass</code> holds end to end</td><td>the rig is otherwise sane</td></tr>
+<tr><td>a header line beyond approximately 2048 octets</td><td>550 milter reject</td><td>the precondition window is bounded above, and that end fails closed</td></tr>
+</table>
+</div>
+<p>Octet 998 can be steered into different parts of the <code>From</code> value by padding the display name or the local part, so the inserted space can be made to land in the display name, in the local part, or inside a domain label. In the last case the delivered header reads <code>vic60 46c7.com</code> while the Authentication-Results <code>header.from</code> and <code>header.d</code> still name the intact <code>vic6046c7.com</code> with <code>dkim=pass</code>.</p>
+
+<h2>Proof of Concept</h2>
+<p>Sign a message with <code>c=simple/simple</code> for a domain that publishes an aligned policy, and pad the <code>From</code> header so that the line exceeds 998 octets with octet 998 falling inside the domain label:</p>
+<pre><code>From: "AAAA...A (padding to place octet 998 inside the domain)" &lt;ceo@vic6046c7.com&gt;</code></pre>
+<pre><code>DKIM-Signature: v=1; a=rsa-sha256; c=simple/simple; d=vic6046c7.com; s=sel;
+    h=from:to:subject; bh=...; b=...</code></pre>
+<p>Submit it through the Postfix plus OpenDKIM plus OpenDMARC chain. Required: either the message is rejected, or the header is folded conformantly and the verdict describes the delivered bytes. Observed:</p>
+<pre><code># header stamped by the chain
+Authentication-Results: receiver.test; dkim=pass header.d=vic6046c7.com
+    header.from=vic6046c7.com
+
+# the From line actually delivered
+From: "AAAA...A" &lt;ceo@vic60 46c7.com&gt;
+                            ^ one space inserted at octet 998</code></pre>
+<p>Checking the delivered <code>From</code> against the same signature outside the chain returns false, while checking the un-spaced form returns true. The trusted <code>dkim=pass</code> therefore rides on bytes the recipient never receives.</p>
+
+<h2>Mitigation</h2>
+<p>Bound or fold over-long header lines before the milters run, or re-verify after any post-milter rewriting, so that the bytes verified are the bytes delivered. Either ordering closes the gap; the present ordering does not.</p>
+<p>Independently, the rewrite itself is worth revisiting: inserting a bare space at octet 998 does not produce a conformant RFC 5322 fold and does not even bring the line under the limit, since the line remains over 998 octets afterwards. A CRLF-plus-whitespace fold, or a rejection, would both be more defensible than a mutation that changes the meaning of the field while leaving it just as long.</p>
+
+<h2>Notes</h2>
+<p><strong>This is not a spoof.</strong> The attacker cannot choose what is inserted — it is always a single space, and always at octet 998 — so a victim domain can only be <em>corrupted</em>, never <em>substituted</em> for an attacker's domain. The authenticated mailbox and the delivered mailbox remain the same modulo the corrupting space. The value to an attacker is limited to the integrity break and to downstream consumers that trust the receiver's Authentication-Results without re-verifying.</p>
+<p><strong>Scope of the RFC claim.</strong> The defensible statement is that the delivered message no longer matches the canonicalised header OpenDKIM authenticated, while the receiver still emits <code>dkim=pass</code>. RFC 6376 section 3.4.1 is cited for the canonicalisation the signature is taken over and RFC 5321 section 4.5.3.1.6 for the 998-octet trigger. It is deliberately <em>not</em> claimed that Postfix violates the canonicalisation rules: the byte mutation originates in Postfix, but the primary defect is that the receiving pipeline permits post-authentication mutation of DKIM-covered header bytes while preserving the verdict written beforehand.</p>
+<p><strong>Methodology caveat.</strong> Re-verifying the delivered copy retrieved from the laboratory sink is <em>not</em> a valid oracle and was not used as one. That copy is contaminated: the relay reorders header fields and prepends <code>Return-Path</code>, <code>DMARC-Filter</code> and <code>Received</code>, so even short control messages fail a naive verification of the sink copy. The evidence used here is OpenDKIM's own Authentication-Results, the byte-level verification split computed outside the chain, and the controls above.</p>
+<p>Distinct from the inbound forged-Authentication-Results finding in this series, which runs in the opposite direction: there an attacker injects a header from outside, whereas here the chain's own legitimately stamped verdict goes stale because the message is mutated after the milter signed off.</p>
+
+<h2>References</h2>
+<ul>
+<li><a href="https://www.rfc-editor.org/rfc/rfc5321#section-4.5.3.1.6">RFC 5321 section 4.5.3.1.6 - Text Line (the 998-octet limit)</a></li>
+<li><a href="https://www.rfc-editor.org/rfc/rfc6376#section-3.4.1">RFC 6376 section 3.4.1 - The "simple" Header Canonicalization Algorithm</a></li>
+<li><a href="https://www.rfc-editor.org/rfc/rfc5322#section-2.2.3">RFC 5322 section 2.2.3 - Long Header Fields (folding)</a></li>
+<li><a href="https://cwe.mitre.org/data/definitions/367.html">CWE-367: Time-of-check Time-of-use (TOCTOU) Race Condition</a></li>
+<li><a href="https://www.postfix.org/">Postfix</a></li>
+<li><a href="https://weitongli.com/">Weitong Li, Virginia Tech - researcher homepage</a></li>
+</ul>
+
+<footer>
+<p>Reported by <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech
+(<a href="mailto:weitongli@vt.edu">weitongli@vt.edu</a>).
+Reproduction environment and full evidence available to the vendor on request.
+CVSS is the researcher's own assessment.</p>
+</footer>
+
+</body>
+</html>

@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>An RFC-valid exotic i= or d= value desynchronises OpenDKIM&#x27;s tag parser, yielding permerror and a false header.a=rsa-sha1 in the Authentication-Results header (OpenDKIM ≤ 2.11.0)</title>
+<style>
+:root { color-scheme: light dark; --fg:#111; --bg:#fff; --muted:#555; --rule:#ddd; --pre:#f5f5f5; --link:#14508c; }
+@media (prefers-color-scheme: dark) {
+  :root { --fg:#e4e4e4; --bg:#161616; --muted:#a0a0a0; --rule:#333; --pre:#1e1e1e; --link:#7fb2e5; }
+}
+body { max-width: 46rem; margin: 2.5rem auto; padding: 0 1.1rem 4rem; background: var(--bg); color: var(--fg);
+       font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+h1 { font-size: 1.35rem; line-height: 1.35; margin: 0 0 1rem; }
+h2 { font-size: 1.05rem; margin: 2rem 0 .6rem; }
+p, li { margin: .6rem 0; }
+a { color: var(--link); }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .87em; }
+pre { background: var(--pre); border: 1px solid var(--rule); padding: .75rem .85rem; overflow-x: auto;
+      font-size: .82rem; line-height: 1.45; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+table { border-collapse: collapse; width: 100%; font-size: .87rem; margin: .7rem 0; }
+th, td { border: 1px solid var(--rule); padding: .35rem .5rem; text-align: left; vertical-align: top; }
+.scroll { overflow-x: auto; }
+.hdr { font-size: .93rem; color: var(--muted); margin: 0 0 1.6rem; }
+.hdr b { color: var(--fg); font-weight: 600; }
+.lead { border-left: 3px solid var(--rule); padding-left: .85rem; margin: 0 0 1.6rem; }
+footer { margin-top: 3rem; padding-top: .8rem; border-top: 1px solid var(--rule);
+         color: var(--muted); font-size: .84rem; }
+</style>
+</head>
+<body>
+
+<h1>An RFC-valid exotic i= or d= value desynchronises OpenDKIM's tag parser, yielding permerror and a false header.a=rsa-sha1 in the Authentication-Results header (OpenDKIM ≤ 2.11.0)</h1>
+
+<p class="hdr">
+<b>Author:</b> <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech &lt;weitongli@vt.edu&gt;<br>
+<b>Date:</b> 2026-07-31<br>
+<b>Vendor:</b> <a href="http://www.trusteddomain.org/">The Trusted Domain Project</a><br>
+<b>Software:</b> <a href="http://www.opendkim.org/">OpenDKIM</a><br>
+<b>Affected version:</b> OpenDKIM 2.11.0 (Debian package <code>2.11.0~beta2-9.1+b1</code>). Rspamd 4.1.2 and dkimpy 1.1.8 are the differential oracles and both handle the same signatures correctly.<br>
+<b>Vulnerable component:</b> DKIM-Signature tag-value parsing (RFC 6376 section 3.5) and the algorithm value written into the Authentication-Results header<br>
+<b>Vulnerability type:</b> CWE-1286 (Improper Validation of Syntactic Correctness of Input) leading to CWE-393 (Return of Wrong Status Code)<br>
+<b>Attack vector:</b> Remote, unauthenticated. One message carrying a cryptographically valid signature made with the sender's own key, using an RFC-valid but unusual <code>i=</code> or <code>d=</code> value. No key material or DNS control of any victim is needed.<br>
+<b>CVSS v3.1:</b> 6.5 (Medium) &mdash; <code>CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:L/A:L</code><br>
+<b>Status:</b> Reproduced on 2026-07-28 against the current release (run <code>20260728-120957</code>) with a scripted reproducer, negative controls, and a second independent implementation as the differential oracle. Deterministic across five repetitions, with syntactic controls that pass and report the correct algorithm, three verifiers on the identical message, and a directed accept-direction sweep that never produced a pass.
+</p>
+
+<p class="lead"><b>Impact.</b> A valid rsa-sha256 signature whose i= carries a quoted local part with an interior at-sign is reported as permerror, with the algorithm misstated as rsa-sha1 in a trusted header.</p>
+
+<h2>Description</h2>
+<p>Two consequences, and neither is a spoof.</p>
+<p><strong>Interoperability.</strong> OpenDKIM rejects RFC-valid mail. Any signer that uses a quoted-string local part in <code>i=</code>, or writes <code>d=</code> with a trailing dot, has its signatures reported <code>permerror</code> on OpenDKIM receivers while Rspamd and dkimpy accept them. Where the sending domain relies on DKIM for DMARC alignment, that becomes a DMARC failure for legitimate mail.</p>
+<p><strong>Authentication-Results integrity.</strong> The false <code>header.a=rsa-sha1</code> is written into a header bearing the receiver's own trusted authentication service identifier. RFC 8601 section 2.7.1 defines <code>header.a</code> as the algorithm actually used, and RFC 8301 deprecates <code>rsa-sha1</code> for DKIM, so any downstream consumer that reads algorithm information out of Authentication-Results — a policy engine that refuses deprecated algorithms, an inventory of algorithm use, a security dashboard — ingests a value with the shape of a downgrade for a message that in fact used SHA-256. Whether a particular consumer acts on it was not measured; the false value itself is deterministic.</p>
+<p>RFC 6376 section 3.5 defines the <code>i=</code> tag as an identity whose local part may be a quoted string, and section 3.2 governs the tag-value list in which it sits. A signature carrying <code>i="x@y"@attacker.net</code>, or a <code>d=</code> with a trailing dot, is therefore syntactically valid.</p>
+<p>Such a value desynchronises OpenDKIM's tag tokenizer. A cryptographically valid <code>rsa-sha256</code> signature is reported as <code>dkim=permerror</code>, and the Authentication-Results header OpenDKIM writes states <code>header.a=rsa-sha1</code> — an algorithm the message never used, and one whose appearance has the shape of a downgrade. Rspamd and dkimpy accept the same signature.</p>
+<p>Four trigger forms were confirmed, on a message whose signature is cryptographically valid, with the key for <code>d=attacker.net</code> published and <code>From: a@attacker.net</code>:</p>
+<pre><code>i="x@y"@attacker.net     quoted-string local part containing an interior '@'
+i=x@y@attacker.net       two unescaped '@'
+i=x\@y@attacker.net      backslash-escaped '@'
+d=attacker.net.          trailing dot</code></pre>
+<p>Three verifiers on the identical message, deterministic across five repetitions:</p>
+<div class="scroll">
+<table>
+<tr><th>Verifier</th><th>Verdict</th><th>Identity and algorithm reported</th></tr>
+<tr><td><strong>OpenDKIM</strong></td><td><strong>dkim=permerror</strong></td><td>stamps <strong><code>header.a=rsa-sha1</code></strong>, which is false: the signature is <code>rsa-sha256</code></td></tr>
+<tr><td>Rspamd</td><td><code>R_DKIM_ALLOW</code>, dkim=pass</td><td>identity <code>attacker.net</code>, taken from <code>d=</code></td></tr>
+<tr><td>dkimpy</td><td><code>verify()</code> returns true</td><td>AUID domain by the last-<code>@</code> split is <code>attacker.net</code>, equal to <code>d=</code>, so valid</td></tr>
+</table>
+</div>
+<p>Controls isolate the cause to a second structural character inside the tag value, rather than to quoting or to the <code>i=</code> tag as such:</p>
+<div class="scroll">
+<table>
+<tr><th>Signature tag under test</th><th>OpenDKIM verdict</th><th>Reported algorithm</th></tr>
+<tr><td><code>i=x@attacker.net</code> (one <code>@</code>, no quoting)</td><td>dkim=pass</td><td><code>rsa-sha256</code>, correct</td></tr>
+<tr><td><code>i="xy"@attacker.net</code> (quoted, no interior <code>@</code>)</td><td>dkim=pass</td><td><code>rsa-sha256</code>, correct</td></tr>
+<tr><td><code>i="x@y"@attacker.net</code> (quoted, interior <code>@</code>)</td><td><strong>dkim=permerror</strong></td><td><strong><code>rsa-sha1</code>, false</strong></td></tr>
+</table>
+</div>
+<p>The false <code>header.a</code> is the direct evidence of the desynchronisation. The value cannot have been read from the message, because the message says <code>a=rsa-sha256</code>; the parser has lost its place and reported a defaulted or stale algorithm instead.</p>
+<p><strong>The direction was tested and it is closed.</strong> A directed accept-direction sweep placed the offending <code>i=</code> immediately before each critical tag in turn — <code>a=</code>, <code>d=</code>, <code>s=</code>, <code>h=</code>, <code>bh=</code>, <code>b=</code> — and additionally tried a duplicated <code>a=rsa-sha1;a=rsa-sha256</code>, a swallowed and a duplicated <code>d=</code>, a dropped <code>a=</code>, an unterminated quote, and a quote-swallow injection aimed at replacing <code>d=</code>. OpenDKIM returned <code>permerror</code>, or wrote no Authentication-Results at all, in every single case and never returned <code>dkim=pass</code>. That includes a case where the injection did make OpenDKIM read <code>header.d=victim.net</code>: the verdict was still <code>permerror</code>.</p>
+
+<h2>Proof of Concept</h2>
+<p>Publish a key for a domain the sender controls and sign an ordinary message with it:</p>
+<pre><code>sel._domainkey.attacker.net.  IN TXT "v=DKIM1; k=rsa; p=&lt;public key&gt;"</code></pre>
+<pre><code>DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=attacker.net; s=sel;
+    i="x@y"@attacker.net; h=from:to:subject; bh=...; b=...
+From: a@attacker.net
+To: user@receiver.test
+Subject: hello
+
+...</code></pre>
+<p>The signature is cryptographically valid over these bytes; dkimpy and Rspamd both confirm it. Required under RFC 6376 section 3.5, given that a quoted-string local part is legal and the AUID domain equals <code>d=</code>: <code>dkim=pass</code>. Observed on OpenDKIM:</p>
+<pre><code>Authentication-Results: receiver.test; dkim=permerror header.d=attacker.net header.a=rsa-sha1</code></pre>
+<p>Both halves of that line are wrong: the signature is valid, and its algorithm is <code>rsa-sha256</code>. Replacing the value with <code>i="xy"@attacker.net</code>, which removes only the interior at-sign, restores <code>dkim=pass</code> with <code>header.a=rsa-sha256</code>.</p>
+
+<h2>Mitigation</h2>
+<p>Correct the DKIM-Signature tag tokenizer so that a quoted string is consumed as a unit, an escaped <code>@</code> does not terminate a value, and a trailing dot in <code>d=</code> is handled as a fully qualified name rather than as a structural break. Tag values must be delimited by the semicolon and equals structure of section 3.2, not by characters that may legitimately occur inside a value.</p>
+<p>Independently of the parse fix, the reporting path must not emit an algorithm it did not read from the signature. If the algorithm cannot be determined, <code>header.a</code> should be omitted rather than defaulted, since a defaulted <code>rsa-sha1</code> is both false and misleading in the direction of a weaker algorithm.</p>
+
+<h2>Notes</h2>
+<p><strong>This is not a spoof, and the report should not be read as one.</strong> The accept-direction sweep described above was run specifically to look for a steerable variant and found none: OpenDKIM never flipped to <code>dkim=pass</code> under any placement or injection tried, including the case where the parser could be made to read a victim domain into <code>header.d</code>. The desync cannot be used to authenticate an identity that should have been rejected. The claimed impact is interoperability plus the integrity of the Authentication-Results value, and nothing more.</p>
+<p>The absence of a steerable variant across that sweep is strong evidence but not a proof that none exists; it bounds what has been demonstrated.</p>
+<p>Distinct from the other DKIM tag findings in this series, which concern an <code>i=</code> outside <code>d=</code>, the key record's <code>k=</code> tag, and the <code>t=s</code> flag. This one is OpenDKIM's tokenizer losing a tag, which the <code>rsa-sha1</code> misreport demonstrates directly.</p>
+
+<h2>References</h2>
+<ul>
+<li><a href="https://www.rfc-editor.org/rfc/rfc6376#section-3.5">RFC 6376 section 3.5 - The DKIM-Signature Header Field (the i= and d= tags)</a></li>
+<li><a href="https://www.rfc-editor.org/rfc/rfc6376#section-3.2">RFC 6376 section 3.2 - Tag=Value Lists</a></li>
+<li><a href="https://www.rfc-editor.org/rfc/rfc8601#section-2.7.1">RFC 8601 section 2.7.1 - DKIM and DomainKeys (the header.a property)</a></li>
+<li><a href="https://www.rfc-editor.org/rfc/rfc8301">RFC 8301 - Cryptographic Algorithm and Key Usage Update to DKIM</a></li>
+<li><a href="https://cwe.mitre.org/data/definitions/1286.html">CWE-1286: Improper Validation of Syntactic Correctness of Input</a></li>
+<li><a href="https://github.com/trusteddomainproject/OpenDKIM">OpenDKIM repository</a></li>
+<li><a href="https://weitongli.com/">Weitong Li, Virginia Tech - researcher homepage</a></li>
+</ul>
+
+<footer>
+<p>Reported by <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech
+(<a href="mailto:weitongli@vt.edu">weitongli@vt.edu</a>).
+Reproduction environment and full evidence available to the vendor on request.
+CVSS is the researcher's own assessment.</p>
+</footer>
+
+</body>
+</html>

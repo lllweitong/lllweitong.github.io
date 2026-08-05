@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>OpenDMARC abandons the walk to the organisational domain when a subdomain publishes a wrong-version DMARC record, so sp=reject is never applied (OpenDMARC ≤ 1.4.2)</title>
+<style>
+:root { color-scheme: light dark; --fg:#111; --bg:#fff; --muted:#555; --rule:#ddd; --pre:#f5f5f5; --link:#14508c; }
+@media (prefers-color-scheme: dark) {
+  :root { --fg:#e4e4e4; --bg:#161616; --muted:#a0a0a0; --rule:#333; --pre:#1e1e1e; --link:#7fb2e5; }
+}
+body { max-width: 46rem; margin: 2.5rem auto; padding: 0 1.1rem 4rem; background: var(--bg); color: var(--fg);
+       font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+h1 { font-size: 1.35rem; line-height: 1.35; margin: 0 0 1rem; }
+h2 { font-size: 1.05rem; margin: 2rem 0 .6rem; }
+p, li { margin: .6rem 0; }
+a { color: var(--link); }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .87em; }
+pre { background: var(--pre); border: 1px solid var(--rule); padding: .75rem .85rem; overflow-x: auto;
+      font-size: .82rem; line-height: 1.45; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+table { border-collapse: collapse; width: 100%; font-size: .87rem; margin: .7rem 0; }
+th, td { border: 1px solid var(--rule); padding: .35rem .5rem; text-align: left; vertical-align: top; }
+.scroll { overflow-x: auto; }
+.hdr { font-size: .93rem; color: var(--muted); margin: 0 0 1.6rem; }
+.hdr b { color: var(--fg); font-weight: 600; }
+.lead { border-left: 3px solid var(--rule); padding-left: .85rem; margin: 0 0 1.6rem; }
+footer { margin-top: 3rem; padding-top: .8rem; border-top: 1px solid var(--rule);
+         color: var(--muted); font-size: .84rem; }
+</style>
+</head>
+<body>
+
+<h1>OpenDMARC abandons the walk to the organisational domain when a subdomain publishes a wrong-version DMARC record, so sp=reject is never applied (OpenDMARC ≤ 1.4.2)</h1>
+
+<p class="hdr">
+<b>Author:</b> <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech &lt;weitongli@vt.edu&gt;<br>
+<b>Date:</b> 2026-07-31<br>
+<b>Vendor:</b> <a href="http://www.trusteddomain.org/">The Trusted Domain Project</a><br>
+<b>Software:</b> <a href="https://github.com/trusteddomainproject/OpenDMARC">OpenDMARC</a><br>
+<b>Affected version:</b> OpenDMARC 1.4.2, built from the upstream tarball <code>rel-opendmarc-1-4-2</code>. The finding was originally isolated on the Debian package <code>1.4.2-1+deb12u1</code> and re-confirmed against pristine upstream. Earlier 1.4.x and 1.3.x releases are expected to share the behaviour.<br>
+<b>Vulnerable component:</b> DMARC policy discovery — the fall-through from the subdomain node to the organisational domain<br>
+<b>Vulnerability type:</b> CWE-755 (Improper Handling of Exceptional Conditions)<br>
+<b>Attack vector:</b> Remote, unauthenticated, when the subdomain already carries a malformed record; otherwise the attacker must be able to publish at the subdomain's <code>_dmarc</code> node.<br>
+<b>CVSS v3.1:</b> 7.5 (High) &mdash; <code>CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:N</code><br>
+<b>Status:</b> Reproduced on 2026-07-28 against the current release (run <code>20260728-120957</code>) with a scripted reproducer, negative controls, and a second independent implementation as the differential oracle. Confirmed under a real <code>.net</code> registrable suffix, so the laboratory's public-suffix fixture cannot confound the result.
+</p>
+
+<p class="lead"><b>Impact.</b> A typo such as v=DMARC2 at a subdomain's _dmarc node makes OpenDMARC permerror instead of falling through to the parent's sp=reject.</p>
+
+<h2>Description</h2>
+<p>A subdomain whose only protection comes from the parent's <code>sp=reject</code> — the very common <code>p=none; sp=reject</code> and organisation-only deployments — becomes fully spoofable on OpenDMARC receivers whenever a typo'd or wrong-version DMARC TXT record sits at the subdomain's <code>_dmarc</code> node. <code>v=DMARC2</code> and <code>v=DMARC1.0</code> are realistic mistakes for an administrator to make.</p>
+<p>Where an attacker can publish at the subdomain — a delegated sub-zone, a tenant-controlled CNAME — publishing one wrong-version record is a deliberate way to switch off the parent's subdomain policy.</p>
+<p>RFC 7489 section 6.6.3 step 2 requires that records not starting with a <code>v=</code> tag identifying the current version of DMARC are discarded, and step 3 requires that if the set is then empty the receiver MUST query the organisational domain. A <code>v=DMARC2</code> or <code>v=DMARC1.0</code> record at a subdomain must therefore be discarded and the walk continued, so that the organisation's <code>sp=</code> applies.</p>
+<p>OpenDMARC returns <code>permerror</code> and aborts. The organisation's <code>sp=reject</code> is never consulted and the forged subdomain mail is delivered.</p>
+<p>Forged, unaligned mail with <code>From: ceo@sub.victim.net</code>; the organisation publishes <code>_dmarc.victim.net = v=DMARC1; p=reject; sp=reject</code>; only the subdomain node varies:</p>
+<div class="scroll">
+<table>
+<tr><th><code>_dmarc.sub.victim.net</code></th><th>OpenDMARC</th><th>Rspamd</th><th>Required</th></tr>
+<tr><td><em>(absent)</em></td><td>dmarc=fail (walks to the organisation, applies <code>sp=reject</code>)</td><td>DMARC_POLICY_REJECT</td><td>fail</td></tr>
+<tr><td><code>hello world</code> (not a <code>v=DMARC</code> record)</td><td>dmarc=fail (discards, walks to the organisation)</td><td>DMARC_POLICY_REJECT</td><td>fail</td></tr>
+<tr><td><code>v=DMARC2; p=none</code></td><td><strong>dmarc=permerror — the organisation's sp= is never consulted</strong></td><td>DMARC_POLICY_REJECT</td><td>fail</td></tr>
+<tr><td><code>v=DMARC1.0; p=none</code></td><td><strong>dmarc=permerror</strong></td><td>DMARC_POLICY_REJECT</td><td>fail</td></tr>
+</table>
+</div>
+<p>The two controls are what make this precise. An absent record, and a record that is not a <code>v=DMARC</code> record at all, both make OpenDMARC walk to the organisation correctly and return <code>fail</code>. OpenDMARC therefore <em>does</em> implement discard-then-walk; it specifically misroutes a <code>v=DMARC&lt;not-1&gt;</code> token to <code>permerror</code> and aborts the walk.</p>
+
+<h2>Proof of Concept</h2>
+<pre><code>_dmarc.victim.net.       IN  TXT  "v=DMARC1; p=reject; sp=reject"
+_dmarc.sub.victim.net.   IN  TXT  "v=DMARC2; p=none"</code></pre>
+<p>Send a forged, unsigned message with <code>From: ceo@sub.victim.net</code> from an unrelated host with an envelope sender in another domain. Required: the subdomain record is discarded, the walk reaches <code>victim.net</code>, <code>sp=reject</code> applies, and the verdict is <code>dmarc=fail</code>. Observed on OpenDMARC: <code>dmarc=permerror</code>, delivered.</p>
+
+<h2>Mitigation</h2>
+<p>Discard a record whose <code>v=</code> does not match the current version and continue policy discovery to the organisational domain, per section 6.6.3 steps 2 and 3. The existing handling of an absent record and of a non-DMARC record already does the right thing; the wrong-version case should join them rather than routing to <code>permerror</code>.</p>
+
+<h2>Notes</h2>
+<p>Shares its root cause with <code>opendmarc-bad-tag-drops-policy</code>, which covers single-node tag validity with the From at the organisation. The distinct contribution here is the failure of the step-3 fall-through and its geometry: the bad record sits at the subdomain and its <code>permerror</code> suppresses the organisation's <code>sp=</code>. Both should be fixed by the same change to the permerror-versus-discard logic.</p>
+
+<h2>References</h2>
+<ul>
+<li><a href="https://www.rfc-editor.org/rfc/rfc7489#section-6.6.3">RFC 7489 section 6.6.3 - Policy Discovery</a></li>
+<li><a href="https://www.rfc-editor.org/rfc/rfc7489#section-6.3">RFC 7489 section 6.3 - the v and sp tags</a></li>
+<li><a href="https://cwe.mitre.org/data/definitions/755.html">CWE-755: Improper Handling of Exceptional Conditions</a></li>
+<li><a href="https://github.com/trusteddomainproject/OpenDMARC">OpenDMARC repository</a></li>
+<li><a href="https://weitongli.com/">Weitong Li, Virginia Tech - researcher homepage</a></li>
+</ul>
+
+<footer>
+<p>Reported by <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech
+(<a href="mailto:weitongli@vt.edu">weitongli@vt.edu</a>).
+Reproduction environment and full evidence available to the vendor on request.
+CVSS is the researcher's own assessment.</p>
+</footer>
+
+</body>
+</html>

@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>OpenDMARC does not convert a U-label From domain to its A-label, so internationalised domains have DMARC bypassed entirely (OpenDMARC ≤ 1.4.2)</title>
+<style>
+:root { color-scheme: light dark; --fg:#111; --bg:#fff; --muted:#555; --rule:#ddd; --pre:#f5f5f5; --link:#14508c; }
+@media (prefers-color-scheme: dark) {
+  :root { --fg:#e4e4e4; --bg:#161616; --muted:#a0a0a0; --rule:#333; --pre:#1e1e1e; --link:#7fb2e5; }
+}
+body { max-width: 46rem; margin: 2.5rem auto; padding: 0 1.1rem 4rem; background: var(--bg); color: var(--fg);
+       font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+h1 { font-size: 1.35rem; line-height: 1.35; margin: 0 0 1rem; }
+h2 { font-size: 1.05rem; margin: 2rem 0 .6rem; }
+p, li { margin: .6rem 0; }
+a { color: var(--link); }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .87em; }
+pre { background: var(--pre); border: 1px solid var(--rule); padding: .75rem .85rem; overflow-x: auto;
+      font-size: .82rem; line-height: 1.45; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+table { border-collapse: collapse; width: 100%; font-size: .87rem; margin: .7rem 0; }
+th, td { border: 1px solid var(--rule); padding: .35rem .5rem; text-align: left; vertical-align: top; }
+.scroll { overflow-x: auto; }
+.hdr { font-size: .93rem; color: var(--muted); margin: 0 0 1.6rem; }
+.hdr b { color: var(--fg); font-weight: 600; }
+.lead { border-left: 3px solid var(--rule); padding-left: .85rem; margin: 0 0 1.6rem; }
+footer { margin-top: 3rem; padding-top: .8rem; border-top: 1px solid var(--rule);
+         color: var(--muted); font-size: .84rem; }
+</style>
+</head>
+<body>
+
+<h1>OpenDMARC does not convert a U-label From domain to its A-label, so internationalised domains have DMARC bypassed entirely (OpenDMARC ≤ 1.4.2)</h1>
+
+<p class="hdr">
+<b>Author:</b> <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech &lt;weitongli@vt.edu&gt;<br>
+<b>Date:</b> 2026-07-31<br>
+<b>Vendor:</b> <a href="http://www.trusteddomain.org/">The Trusted Domain Project</a><br>
+<b>Software:</b> <a href="https://github.com/trusteddomainproject/OpenDMARC">OpenDMARC</a><br>
+<b>Affected version:</b> OpenDMARC 1.4.2, built from the upstream tarball <code>rel-opendmarc-1-4-2</code>. The finding was originally isolated on the Debian package <code>1.4.2-1+deb12u1</code> and re-confirmed against pristine upstream. Earlier 1.4.x and 1.3.x releases are expected to share the behaviour.<br>
+<b>Vulnerable component:</b> DMARC Author Domain extraction — the missing IDNA ToASCII conversion before the <code>_dmarc</code> lookup and alignment<br>
+<b>Vulnerability type:</b> CWE-172 (Encoding Error) / CWE-290 (Authentication Bypass by Spoofing)<br>
+<b>Attack vector:</b> Remote, unauthenticated, no user interaction. One forged, unaligned message.<br>
+<b>CVSS v3.1:</b> 7.5 (High) &mdash; <code>CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:N</code><br>
+<b>Status:</b> Reproduced on 2026-07-28 against the current release (run <code>20260728-120957</code>) with a scripted reproducer, negative controls, and a second independent implementation as the differential oracle. Reproduced for Latin (<code>münchen</code>, <code>café</code>), CJK (<code>例え</code>) and a Cyrillic homoglyph, under both <code>p=reject</code> and <code>p=quarantine</code>.
+</p>
+
+<p class="lead"><b>Impact.</b> Writing the victim's IDN in Unicode rather than punycode makes OpenDMARC report dmarc=none, defeating p=reject for every IDN sender.</p>
+
+<h2>Description</h2>
+<p>Three consequences, all following from the same missing conversion:</p>
+<ul>
+<li><strong>Policy bypass.</strong> Any internationalised sending domain has its <code>p=reject</code> or <code>p=quarantine</code> fully bypassed on OpenDMARC receivers, at no cost to the attacker.</li>
+<li><strong>Homoglyph phishing.</strong> An attacker who registers a look-alike internationalised domain and writes it in U-label form obtains <code>dmarc=none</code> regardless of any policy.</li>
+<li><strong>Denial of validation.</strong> In the legitimate direction, an internationalised domain's own correctly signed, aligned mail is treated as policy-less: U-label From plus a valid A-label DKIM signature yields <code>dmarc=none</code> on OpenDMARC where Rspamd returns <code>dmarc=pass</code>.</li>
+</ul>
+<p>A DMARC policy for an internationalised domain can only exist in DNS at the A-label node, for instance <code>_dmarc.xn--mnchen-3ya.example.com</code>. RFC 7489 section 6.6.1 therefore requires the verifier to convert a UTF-8 From domain to its A-label before querying.</p>
+<p>OpenDMARC performs no conversion. It queries using the raw UTF-8 bytes, never finds the policy, and stamps <code>dmarc=none</code>. Every sender using an internationalised domain has its published <code>p=reject</code> or <code>p=quarantine</code> completely unenforced on OpenDMARC receivers.</p>
+<p>The victim publishes its policy at the only node it can occupy:</p>
+<pre><code>_dmarc.xn--mnchen-3ya.example.com.  IN  TXT  "v=DMARC1; p=reject"</code></pre>
+<p>A forged, unaligned message (no aligned DKIM; envelope sender <code>bounce@attacker.invalid</code>; SPF <code>-all</code>) varies only the form of the From domain:</p>
+<div class="scroll">
+<table>
+<tr><th>From domain form</th><th>OpenDMARC</th><th>Rspamd</th><th>Required</th></tr>
+<tr><td><code>ceo@münchen.example.com</code> (U-label, UTF-8)</td><td><strong>dmarc=none — delivered</strong></td><td>dmarc=fail, policy reject</td><td>fail</td></tr>
+<tr><td><code>ceo@xn--mnchen-3ya.example.com</code> (A-label, control)</td><td>dmarc=fail</td><td>dmarc=fail</td><td>fail</td></tr>
+<tr><td><code>ceo@plainmunich.example.com</code> (ASCII, control)</td><td>dmarc=fail</td><td>dmarc=fail</td><td>fail</td></tr>
+</table>
+</div>
+<p>The two controls isolate the single variable: only the U-label form makes OpenDMARC fail open. The header it writes shows the failure directly:</p>
+<pre><code>Authentication-Results: receiver.test; dmarc=none (p=none dis=none)
+    header.from=münchen.example.com</code></pre>
+<p>It both abandons the policy and records a non-A-label domain, contrary to section 6.6.</p>
+<p>Publishing the record additionally at the literal raw-UTF-8 node <code>_dmarc.münchen.example.com</code> does <em>not</em> make OpenDMARC find it. That places the defect before the DNS match: OpenDMARC abandons DMARC for a non-ASCII From rather than normalising it.</p>
+
+<h2>Proof of Concept</h2>
+<pre><code># zone
+_dmarc.xn--mnchen-3ya.example.com.  IN  TXT  "v=DMARC1; p=reject"
+
+# forged message, unsigned, unaligned envelope
+MAIL FROM:&lt;bounce@attacker.invalid&gt;
+RCPT TO:&lt;user@receiver.test&gt;
+DATA
+From: ceo@münchen.example.com
+To: user@receiver.test
+Subject: payroll update
+
+...
+.</code></pre>
+<p>Required result: <code>dmarc=fail</code>, disposition reject. Observed on OpenDMARC: <code>dmarc=none</code>, delivered.</p>
+
+<h2>Mitigation</h2>
+<p>Apply IDNA ToASCII to the extracted Author Domain before the <code>_dmarc</code> query and before alignment, and record the A-label in the Authentication-Results header, as section 6.6.1 requires. See <code>opendmarc-unicode-dot-bypass</code>: the conversion must include UTS-46 mapping, not only punycoding of labels that contain non-ASCII letters.</p>
+
+<h2>References</h2>
+<ul>
+<li><a href="https://www.rfc-editor.org/rfc/rfc7489#section-6.6.1">RFC 7489 section 6.6.1 - Extract Author Domain</a></li>
+<li><a href="https://www.rfc-editor.org/rfc/rfc5891">RFC 5891 - Internationalized Domain Names in Applications (IDNA): Protocol</a></li>
+<li><a href="https://cwe.mitre.org/data/definitions/172.html">CWE-172: Encoding Error</a></li>
+<li><a href="https://github.com/trusteddomainproject/OpenDMARC">OpenDMARC repository</a></li>
+<li><a href="https://weitongli.com/">Weitong Li, Virginia Tech - researcher homepage</a></li>
+</ul>
+
+<footer>
+<p>Reported by <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech
+(<a href="mailto:weitongli@vt.edu">weitongli@vt.edu</a>).
+Reproduction environment and full evidence available to the vendor on request.
+CVSS is the researcher's own assessment.</p>
+</footer>
+
+</body>
+</html>

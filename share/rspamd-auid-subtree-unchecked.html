@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Rspamd does not check that a DKIM signature&#x27;s i= AUID lies within the d= domain, so a valid signature can carry an arbitrary authenticated identity (Rspamd ≤ 4.1.2)</title>
+<style>
+:root { color-scheme: light dark; --fg:#111; --bg:#fff; --muted:#555; --rule:#ddd; --pre:#f5f5f5; --link:#14508c; }
+@media (prefers-color-scheme: dark) {
+  :root { --fg:#e4e4e4; --bg:#161616; --muted:#a0a0a0; --rule:#333; --pre:#1e1e1e; --link:#7fb2e5; }
+}
+body { max-width: 46rem; margin: 2.5rem auto; padding: 0 1.1rem 4rem; background: var(--bg); color: var(--fg);
+       font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+h1 { font-size: 1.35rem; line-height: 1.35; margin: 0 0 1rem; }
+h2 { font-size: 1.05rem; margin: 2rem 0 .6rem; }
+p, li { margin: .6rem 0; }
+a { color: var(--link); }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .87em; }
+pre { background: var(--pre); border: 1px solid var(--rule); padding: .75rem .85rem; overflow-x: auto;
+      font-size: .82rem; line-height: 1.45; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+table { border-collapse: collapse; width: 100%; font-size: .87rem; margin: .7rem 0; }
+th, td { border: 1px solid var(--rule); padding: .35rem .5rem; text-align: left; vertical-align: top; }
+.scroll { overflow-x: auto; }
+.hdr { font-size: .93rem; color: var(--muted); margin: 0 0 1.6rem; }
+.hdr b { color: var(--fg); font-weight: 600; }
+.lead { border-left: 3px solid var(--rule); padding-left: .85rem; margin: 0 0 1.6rem; }
+footer { margin-top: 3rem; padding-top: .8rem; border-top: 1px solid var(--rule);
+         color: var(--muted); font-size: .84rem; }
+</style>
+</head>
+<body>
+
+<h1>Rspamd does not check that a DKIM signature's i= AUID lies within the d= domain, so a valid signature can carry an arbitrary authenticated identity (Rspamd ≤ 4.1.2)</h1>
+
+<p class="hdr">
+<b>Author:</b> <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech &lt;weitongli@vt.edu&gt;<br>
+<b>Date:</b> 2026-07-31<br>
+<b>Vendor:</b> <a href="https://rspamd.com/">Rspamd project (Vsevolod Stakhov)</a><br>
+<b>Software:</b> <a href="https://github.com/rspamd/rspamd">Rspamd</a><br>
+<b>Affected version:</b> Rspamd 4.1.2. Originally isolated on 3.10.2 and re-confirmed on 4.1.2 on 2026-07-28. OpenDKIM 2.11.0 enforces the relationship correctly.<br>
+<b>Vulnerable component:</b> DKIM-Signature tag validation — the RFC 6376 section 3.5 constraint that the <code>i=</code> AUID domain be <code>d=</code> or a subdomain of it<br>
+<b>Vulnerability type:</b> CWE-347 (Improper Verification of Cryptographic Signature) / CWE-20 (Improper Input Validation)<br>
+<b>Attack vector:</b> Remote. The attacker must be able to obtain one valid signature under the target <code>d=</code>, for instance through a shared signing service, a re-signing list, or a delegated selector.<br>
+<b>CVSS v3.1:</b> 4.3 (Medium) &mdash; <code>CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:N/I:L/A:N</code><br>
+<b>Status:</b> Reproduced on 2026-07-28 against the current release (run <code>20260728-120957</code>) with a scripted reproducer, negative controls, and a second independent implementation as the differential oracle. Confirmed with a five-point boundary probe covering the exact, subdomain, parent, sibling and unrelated forms of the AUID domain.
+</p>
+
+<p class="lead"><b>Impact.</b> A signature validly made for d=signer still passes on Rspamd with i=@attacker.test, so the authenticated on-behalf-of identity is unbound from the signing domain.</p>
+
+<h2>Description</h2>
+<p>DMARC alignment is computed on <code>d=</code>, not on <code>i=</code>, so this finding does not by itself defeat DMARC and is not claimed to. The exposure is to every consumer that treats the AUID as an authenticated identity.</p>
+<p>An attacker who holds any valid signature under a given <code>d=</code> — a tenant of a shared signing service or ESP, a mailing list that re-signs with the list owner's domain, the holder of a delegated selector — can set the AUID to any value at all. Rspamd then reports <code>R_DKIM_ALLOW</code> with that attacker-chosen <code>header.i=</code>. Per-user DKIM policy, “signed on behalf of” presentation in a mail client, reputation systems and analytics keyed on <code>i=</code> are all misled, because on Rspamd the AUID is no longer bound to the domain holding the key, which is the one property RFC 6376 gives it.</p>
+<p>RFC 6376 section 3.5 states of the <code>i=</code> tag that <em>“the domain part of the address MUST be the same as, or a subdomain of, the value of the <code>d=</code> tag”</em>, and section 6.1.2 requires the verifier to treat a signature that breaks the relationship as invalid. The AUID is the identity on whose behalf the message is signed, and the constraint is what binds it to the domain that actually holds the key.</p>
+<p>Rspamd parses <code>i=</code>, reports it as <code>header.i=</code>, and never checks it. A cryptographically valid signature for <code>d=signer.example.com</code> yields <code>R_DKIM_ALLOW</code> for every AUID domain tried, including a parent domain, a sibling domain and an entirely unrelated one. OpenDKIM returns <code>permerror</code> for exactly the values that leave the <code>d=</code> subtree.</p>
+<p>The signature, the key and the message body are fixed. Only the domain on the right-hand side of the <code>@</code> in <code>i=</code> varies, with <code>d=signer.example.com</code> throughout:</p>
+<div class="scroll">
+<table>
+<tr><th><code>i=</code> AUID domain</th><th>Relationship to <code>d=</code></th><th>OpenDKIM</th><th>Rspamd</th><th>Required</th></tr>
+<tr><td><code>@signer.example.com</code></td><td>exact match</td><td>pass</td><td><code>R_DKIM_ALLOW</code></td><td>pass</td></tr>
+<tr><td><code>@sub.signer.example.com</code></td><td>subdomain</td><td>pass</td><td><code>R_DKIM_ALLOW</code></td><td>pass</td></tr>
+<tr><td><code>@example.com</code></td><td>parent</td><td><strong>permerror</strong></td><td><strong><code>R_DKIM_ALLOW</code></strong></td><td>fail</td></tr>
+<tr><td><code>@evil-other.example.com</code></td><td>sibling</td><td><strong>permerror</strong></td><td><strong><code>R_DKIM_ALLOW</code></strong></td><td>fail</td></tr>
+<tr><td><code>@attacker.test</code></td><td>unrelated</td><td><strong>permerror</strong></td><td><strong><code>R_DKIM_ALLOW</code></strong></td><td>fail</td></tr>
+</table>
+</div>
+<p>The boundary is sharp on OpenDKIM and absent on Rspamd. OpenDKIM permerrors precisely when the AUID leaves the <code>d=</code> subtree and accepts the two forms the specification permits, which demonstrates that the required behaviour is implementable and implemented elsewhere. Rspamd's verdict does not move at any point along the boundary, which is the direct evidence that the check is not performed at all rather than performed too loosely.</p>
+<p>Two rows carry the weight of the finding. The parent row shows that a signer confined to a subdomain can claim the organisational domain above it, and the unrelated row shows that the AUID need not bear any relationship whatsoever to the key holder. In both cases Rspamd reports the attacker-chosen value as the authenticated <code>header.i=</code>.</p>
+
+<h2>Proof of Concept</h2>
+<p>Publish an ordinary key record for the signing domain:</p>
+<pre><code>sel._domainkey.signer.example.com.  IN TXT "v=DKIM1; k=rsa; p=&lt;base64 RSA public key&gt;"</code></pre>
+<p>Produce a cryptographically valid signature with that key, carrying an AUID outside the signing domain. The <code>i=</code> tag is part of the DKIM-Signature header field and is therefore covered by <code>b=</code>, so it must be present when the signature is computed:</p>
+<pre><code>DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=signer.example.com; s=sel;
+    i=user@attacker.test; h=from:to:subject:date; bh=&lt;body hash&gt;; b=&lt;signature&gt;</code></pre>
+<p>Required under RFC 6376 section 3.5: the AUID domain <code>attacker.test</code> is neither <code>signer.example.com</code> nor a subdomain of it, so the signature is invalid. Observed on OpenDKIM: <code>dkim=permerror</code>. Observed on Rspamd: <code>R_DKIM_ALLOW</code>, with <code>header.i=user@attacker.test</code> reported as authenticated.</p>
+<p>Repeat with <code>i=user@signer.example.com</code> and <code>i=user@sub.signer.example.com</code> as controls; both verifiers pass, which confirms the rig produces valid signatures and isolates the AUID domain as the only variable.</p>
+
+<h2>Mitigation</h2>
+<p>After the cryptographic verification succeeds, compare the domain to the right of the <code>@</code> in <code>i=</code> with the value of <code>d=</code>, and treat the signature as invalid unless the two are equal or the AUID domain is a subdomain of <code>d=</code>, per RFC 6376 section 3.5. The comparison must be made before <code>header.i=</code> is reported, so that no unvalidated identity is ever stamped as authenticated.</p>
+
+<h2>Notes</h2>
+<p>Related but distinct from <code>dkim-strict-flag-unenforced</code>. This entry is the section 3.5 default constraint, under which a subdomain AUID is legal and only values outside the subtree are invalid. That one is the section 3.6.1 <code>t=s</code> strict flag, which additionally forbids the subdomain form. The two are separate checks in separate sections, and Rspamd misses both.</p>
+<p>Recorded from the same probe and deliberately not claimed: <code>q=http</code> and <code>q=dns/foo</code> produce an OpenDKIM <code>permerror</code> against an Rspamd pass, but RFC 6376 says unrecognised query methods are to be ignored and leaves the no-method-remaining case underspecified, so the correct verdict is genuinely ambiguous and the split is not a bug claim. Unknown signature tags such as <code>z9=</code> are a consensus pass on both.</p>
+<p>Confirmation against upstream <code>rspamd_dkim</code>, and identification of the point at which <code>i=</code> is parsed for reporting but not validated, remain open steps.</p>
+
+<h2>References</h2>
+<ul>
+<li><a href="https://www.rfc-editor.org/rfc/rfc6376#section-3.5">RFC 6376 section 3.5 - The DKIM-Signature Header Field (the i= tag)</a></li>
+<li><a href="https://www.rfc-editor.org/rfc/rfc6376#section-6.1.2">RFC 6376 section 6.1.2 - Get the Public Key</a></li>
+<li><a href="https://www.rfc-editor.org/rfc/rfc8601#section-2.7.1">RFC 8601 section 2.7.1 - DKIM and DomainKeys (the header.i reporting property)</a></li>
+<li><a href="https://cwe.mitre.org/data/definitions/347.html">CWE-347: Improper Verification of Cryptographic Signature</a></li>
+<li><a href="https://cwe.mitre.org/data/definitions/20.html">CWE-20: Improper Input Validation</a></li>
+<li><a href="https://rspamd.com/">Rspamd</a></li>
+<li><a href="https://weitongli.com/">Weitong Li, Virginia Tech - researcher homepage</a></li>
+</ul>
+
+<footer>
+<p>Reported by <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech
+(<a href="mailto:weitongli@vt.edu">weitongli@vt.edu</a>).
+Reproduction environment and full evidence available to the vendor on request.
+CVSS is the researcher's own assessment.</p>
+</footer>
+
+</body>
+</html>

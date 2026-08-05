@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Rspamd discards a DMARC record whose v= tag is not first while OpenDMARC enforces it, so tag order decides whether a domain is protected (OpenDMARC &lt;= 1.4.2 and Rspamd ≤ 4.1.2)</title>
+<style>
+:root { color-scheme: light dark; --fg:#111; --bg:#fff; --muted:#555; --rule:#ddd; --pre:#f5f5f5; --link:#14508c; }
+@media (prefers-color-scheme: dark) {
+  :root { --fg:#e4e4e4; --bg:#161616; --muted:#a0a0a0; --rule:#333; --pre:#1e1e1e; --link:#7fb2e5; }
+}
+body { max-width: 46rem; margin: 2.5rem auto; padding: 0 1.1rem 4rem; background: var(--bg); color: var(--fg);
+       font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+h1 { font-size: 1.35rem; line-height: 1.35; margin: 0 0 1rem; }
+h2 { font-size: 1.05rem; margin: 2rem 0 .6rem; }
+p, li { margin: .6rem 0; }
+a { color: var(--link); }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .87em; }
+pre { background: var(--pre); border: 1px solid var(--rule); padding: .75rem .85rem; overflow-x: auto;
+      font-size: .82rem; line-height: 1.45; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+table { border-collapse: collapse; width: 100%; font-size: .87rem; margin: .7rem 0; }
+th, td { border: 1px solid var(--rule); padding: .35rem .5rem; text-align: left; vertical-align: top; }
+.scroll { overflow-x: auto; }
+.hdr { font-size: .93rem; color: var(--muted); margin: 0 0 1.6rem; }
+.hdr b { color: var(--fg); font-weight: 600; }
+.lead { border-left: 3px solid var(--rule); padding-left: .85rem; margin: 0 0 1.6rem; }
+footer { margin-top: 3rem; padding-top: .8rem; border-top: 1px solid var(--rule);
+         color: var(--muted); font-size: .84rem; }
+</style>
+</head>
+<body>
+
+<h1>Rspamd discards a DMARC record whose v= tag is not first while OpenDMARC enforces it, so tag order decides whether a domain is protected (OpenDMARC &lt;= 1.4.2 and Rspamd ≤ 4.1.2)</h1>
+
+<p class="hdr">
+<b>Author:</b> <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech &lt;weitongli@vt.edu&gt;<br>
+<b>Date:</b> 2026-07-31<br>
+<b>Vendor:</b> <a href="http://www.trusteddomain.org/">Rspamd project (Vsevolod Stakhov) (fail-open side) and The Trusted Domain Project (specification-violating side)</a><br>
+<b>Software:</b> <a href="https://github.com/trusteddomainproject/OpenDMARC">Rspamd and OpenDMARC</a><br>
+<b>Affected version:</b> Rspamd 4.1.2, originally isolated on 3.10.2, is the fail-open side. OpenDMARC 1.4.2 over-enforces, which is a specification violation in the safe direction.<br>
+<b>Vulnerable component:</b> DMARC record validation — the requirement that <code>v=</code> be the first tag<br>
+<b>Vulnerability type:</b> CWE-436 (Interpretation Conflict)<br>
+<b>Attack vector:</b> Remote, unauthenticated, when the victim's record already has the tags out of order; otherwise the attacker must be able to prepend a tag to the published record.<br>
+<b>CVSS v3.1:</b> 5.9 (Medium) &mdash; <code>CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:H/A:N</code><br>
+<b>Status:</b> Reproduced on 2026-07-28 against the current release (run <code>20260728-120957</code>) with a scripted reproducer, negative controls, and a second independent implementation as the differential oracle. Three repetitions, single <code>_dmarc</code> TXT record at a <code>.com</code> organisation, with the tag-order control.
+</p>
+
+<p class="lead"><b>Impact.</b> A record such as p=reject; v=DMARC1 is treated as no DMARC by Rspamd and delivers the forgery, while OpenDMARC still rejects it.</p>
+
+<h2>Description</h2>
+<p>The exposure is asymmetric, and the entry is written accordingly. OpenDMARC deviates from the specification in the <em>stricter</em> direction: a record with <code>v=</code> out of order still protects the domain, so its deviation is not attacker-useful.</p>
+<p>The fail-open lands on Rspamd. A domain whose published record has the tags out of order — through a typo, a content-management template that reorders tags, or an injection that prepends a tag — is treated as having no DMARC and becomes spoofable on Rspamd receivers, while OpenDMARC receivers still block the same message. The domain owner sees protection working on some receivers and not others, with no signal as to why.</p>
+<p>RFC 7489 section 6.6.3 step 2 says records that do not start with a <code>v=</code> tag are discarded, and section 6.3 with the section 6.4 ABNF places <code>v</code> first positionally.</p>
+<p>Rspamd follows this and discards such a record, returning <code>DMARC_NA</code>. OpenDMARC parses past the ordering and enforces the policy it finds. The two therefore disagree about whether a domain has a DMARC policy at all, and the fail-open exposure lands on Rspamd.</p>
+<p>A single <code>_dmarc</code> TXT record at a <code>.com</code> organisation, forged unaligned mail, three repetitions:</p>
+<div class="scroll">
+<table>
+<tr><th><code>_dmarc</code> record</th><th>OpenDMARC</th><th>Rspamd</th></tr>
+<tr><td><code>v=DMARC1; p=reject</code> (control)</td><td>dmarc=fail, <code>p=reject</code></td><td>DMARC_POLICY_REJECT</td></tr>
+<tr><td><code>p=reject; v=DMARC1</code></td><td>dmarc=fail, <code>p=reject</code></td><td><strong>DMARC_NA — no valid record, delivered</strong></td></tr>
+<tr><td><code>adkim=s; v=DMARC1; p=reject</code></td><td>dmarc=fail</td><td><strong>DMARC_NA</strong></td></tr>
+<tr><td><code>sp=none; v=DMARC1; p=reject</code></td><td>dmarc=fail</td><td><strong>DMARC_NA</strong></td></tr>
+</table>
+</div>
+<p>The only difference from the consensus baseline is that <code>v=</code> is no longer first, which isolates tag order as the sole cause.</p>
+<p>A secondary case: <code>v=DMARC1; p=; p=reject</code> and <code>v=DMARC1;; p=reject</code> make OpenDMARC resolve <code>reject</code> while Rspamd returns <code>DMARC_POLICY_SOFTFAIL</code> with no disposition.</p>
+<p>Several related hypotheses were swept and found to be consensus, and are recorded here so the finding is not overstated: a duplicate <code>p=</code> is taken as the last by both; <code>p=Reject</code> in the wrong case is accepted by both, correctly, since ABNF literals are case-insensitive; and <code>p=foobar</code> makes both apply no policy.</p>
+
+<h2>Proof of Concept</h2>
+<pre><code>_dmarc.victim.example.  IN  TXT  "p=reject; v=DMARC1"</code></pre>
+<p>Send a forged, unaligned message with <code>From: ceo@victim.example</code>. Rspamd returns <code>DMARC_NA</code> and delivers; OpenDMARC returns <code>dmarc=fail</code> and rejects.</p>
+
+<h2>Mitigation</h2>
+<p>Rspamd is behaving as the specification requires, so the practical remedy is operational: emit a diagnostic that distinguishes “a TXT record exists at <code>_dmarc</code> but was discarded as invalid” from “no record exists”, so the misconfiguration is visible to the domain owner rather than silently equivalent to having no policy. OpenDMARC should additionally enforce the first-tag requirement so that the two agree.</p>
+
+<h2>Notes</h2>
+<p>This is the opposite direction to the other DMARC record-parsing findings in this set, where OpenDMARC fails open and Rspamd is correct. Here OpenDMARC over-enforces and Rspamd is the fail-open side. It is included because the cross-verifier disagreement is the security-relevant fact: one receiver blocks the forgery and the other delivers it.</p>
+<p>Because Rspamd's behaviour is specification-conformant, a vendor may reasonably decline this as a defect. It is submitted as an interoperability and diagnosability issue rather than as an implementation flaw.</p>
+
+<h2>References</h2>
+<ul>
+<li><a href="https://www.rfc-editor.org/rfc/rfc7489#section-6.6.3">RFC 7489 section 6.6.3 - Policy Discovery</a></li>
+<li><a href="https://www.rfc-editor.org/rfc/rfc7489#section-6.4">RFC 7489 section 6.4 - Formal Definition (the ABNF)</a></li>
+<li><a href="https://cwe.mitre.org/data/definitions/436.html">CWE-436: Interpretation Conflict</a></li>
+<li><a href="https://rspamd.com/">Rspamd</a></li>
+<li><a href="https://github.com/trusteddomainproject/OpenDMARC">OpenDMARC repository</a></li>
+<li><a href="https://weitongli.com/">Weitong Li, Virginia Tech - researcher homepage</a></li>
+</ul>
+
+<footer>
+<p>Reported by <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech
+(<a href="mailto:weitongli@vt.edu">weitongli@vt.edu</a>).
+Reproduction environment and full evidence available to the vendor on request.
+CVSS is the researcher's own assessment.</p>
+</footer>
+
+</body>
+</html>

@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Rspamd ignores the digit transformer in SPF macro expansion, so a mechanism built from %{d2} queries the untruncated domain (Rspamd ≤ 4.1.2)</title>
+<style>
+:root { color-scheme: light dark; --fg:#111; --bg:#fff; --muted:#555; --rule:#ddd; --pre:#f5f5f5; --link:#14508c; }
+@media (prefers-color-scheme: dark) {
+  :root { --fg:#e4e4e4; --bg:#161616; --muted:#a0a0a0; --rule:#333; --pre:#1e1e1e; --link:#7fb2e5; }
+}
+body { max-width: 46rem; margin: 2.5rem auto; padding: 0 1.1rem 4rem; background: var(--bg); color: var(--fg);
+       font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+h1 { font-size: 1.35rem; line-height: 1.35; margin: 0 0 1rem; }
+h2 { font-size: 1.05rem; margin: 2rem 0 .6rem; }
+p, li { margin: .6rem 0; }
+a { color: var(--link); }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .87em; }
+pre { background: var(--pre); border: 1px solid var(--rule); padding: .75rem .85rem; overflow-x: auto;
+      font-size: .82rem; line-height: 1.45; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+table { border-collapse: collapse; width: 100%; font-size: .87rem; margin: .7rem 0; }
+th, td { border: 1px solid var(--rule); padding: .35rem .5rem; text-align: left; vertical-align: top; }
+.scroll { overflow-x: auto; }
+.hdr { font-size: .93rem; color: var(--muted); margin: 0 0 1.6rem; }
+.hdr b { color: var(--fg); font-weight: 600; }
+.lead { border-left: 3px solid var(--rule); padding-left: .85rem; margin: 0 0 1.6rem; }
+footer { margin-top: 3rem; padding-top: .8rem; border-top: 1px solid var(--rule);
+         color: var(--muted); font-size: .84rem; }
+</style>
+</head>
+<body>
+
+<h1>Rspamd ignores the digit transformer in SPF macro expansion, so a mechanism built from %{d2} queries the untruncated domain (Rspamd ≤ 4.1.2)</h1>
+
+<p class="hdr">
+<b>Author:</b> <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech &lt;weitongli@vt.edu&gt;<br>
+<b>Date:</b> 2026-07-31<br>
+<b>Vendor:</b> <a href="https://rspamd.com/">Rspamd project (Vsevolod Stakhov)</a><br>
+<b>Software:</b> <a href="https://github.com/rspamd/rspamd">Rspamd</a><br>
+<b>Affected version:</b> Rspamd 4.1.2. Originally isolated on 3.10.2 and re-confirmed on 4.1.2 on 2026-07-28.<br>
+<b>Vulnerable component:</b> SPF module — macro expansion, specifically the transformer digit in <code>%{dN}</code> and <code>%{oN}</code><br>
+<b>Vulnerability type:</b> CWE-20 (Improper Input Validation)<br>
+<b>Attack vector:</b> Remote. No attacker action is required: any sender whose published record uses a digit transformer is evaluated against the wrong name on every Rspamd receiver.<br>
+<b>CVSS v3.1:</b> 4.8 (Medium) &mdash; <code>CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:L/A:L</code><br>
+<b>Status:</b> Reproduced on 2026-07-28 against the current release (run <code>20260728-120957</code>) with a scripted reproducer, negative controls, and a second independent implementation as the differential oracle. A DNS-toggle experiment publishing the A record at exactly one of the two candidate names, with <code>%{d}</code> and <code>%{dr}</code> as consensus controls, re-verified on a second host.
+</p>
+
+<p class="lead"><b>Impact.</b> A record written with exists:%{d2}.k.probe.example.com is evaluated by Rspamd against the full sender domain rather than its rightmost two labels, so the mechanism matches on the wrong DNS name or not at all.</p>
+
+<h2>Description</h2>
+<p>A domain's published SPF policy does not evaluate as authored on Rspamd receivers. Digit transformers appear in real records: they are the idiomatic way to reference an organisational domain from a subdomain sender, and large senders use them for per-tenant and per-address-range <code>exists:</code> patterns.</p>
+<p>The usual direction is fail-closed. The intended name is not queried, the mechanism does not match, evaluation falls through to the record's terminal <code>-all</code>, and a legitimate sender's aligned mail is marked <code>spf=fail</code> and can fail DMARC under the sender's own policy. The fail-open direction exists but is conditional: if a record happens to exist at the untruncated name — a wildcard under the probe zone, or a name published for another purpose — then a mechanism that should not have matched does match, and an unintended host is authorised. That requires the untruncated name to exist by coincidence or by an attacker's arrangement, so it is a narrower case than the fail-closed one.</p>
+<p>Either way the record author's intent is not what is enforced, and the same record produces different verdicts on Rspamd and on conforming verifiers.</p>
+<p>RFC 7208 section 7.3 specifies that a digit in a macro transformer gives the number of rightmost labels to keep after expansion. On a sender domain of <code>m.n.o.example.com</code>, <code>%{d2}</code> must expand to <code>example.com</code>.</p>
+<p>Rspamd parses the macro but drops the digit and expands to the full domain. Every DNS-querying mechanism built from <code>%{dN}</code> — <code>exists:</code>, <code>a:</code>, <code>mx:</code>, <code>include:</code> — therefore queries a name the record author never wrote, and the mechanism does not match where it was intended to.</p>
+<p>The experiment is a DNS toggle, which removes any dependence on the connecting address: <code>exists:</code> matches on the existence of a name, so publishing the A record at exactly one of the two candidate names reveals which name was queried. The sender is <code>m.n.o.example.com</code> and the record is <code>v=spf1 exists:%{d2}.k.probe.example.com -all</code>, so a conforming expansion of <code>%{d2}</code> is <code>example.com</code>:</p>
+<div class="scroll">
+<table>
+<tr><th>A record published at</th><th>OpenDMARC</th><th>Rspamd</th><th>What this shows</th></tr>
+<tr><td><code>example.com.k.probe.example.com</code> (rightmost two labels, the conforming name)</td><td>spf=pass</td><td><strong><code>R_SPF_FAIL</code></strong></td><td>OpenDMARC expanded <code>%{d2}</code> to <code>example.com</code>; Rspamd never queried that name</td></tr>
+<tr><td><code>m.n.o.example.com.k.probe.example.com</code> (untruncated)</td><td>spf=fail</td><td><strong><code>R_SPF_ALLOW</code></strong></td><td>Rspamd queried the full domain, dropping the <code>2</code></td></tr>
+</table>
+</div>
+<p>The two rows are mutually exclusive and between them pin the expansion exactly. Only one name exists at a time, and each verifier passes precisely when the name it queried is the one that exists.</p>
+<p>Controls isolate the digit as the sole cause. <code>%{d}</code> with no transformer and <code>%{dr}</code> with the reverse transformer are both consensus: Rspamd applies reversal and delimiter splitting correctly, and only the truncation digit is lost. The divergence generalises to <code>%{d3}</code> and <code>%{d4}</code>, and to <code>%{o2}</code> on the <code>MAIL FROM</code> domain, so it is a property of the transformer parser rather than of one macro letter.</p>
+<p>A five-label sender name was used deliberately so that the laboratory's <code>example.com</code>-as-public-suffix fixture plays no part in the result: the truncation under test removes three labels and is unrelated to any organisational-domain computation.</p>
+
+<h2>Proof of Concept</h2>
+<p>Publish, for a sender domain of five labels, a record whose only querying term uses a digit transformer, and place the A record at the conforming name only:</p>
+<pre><code>m.n.o.example.com.                      IN TXT "v=spf1 exists:%{d2}.k.probe.example.com -all"
+example.com.k.probe.example.com.        IN A   192.0.2.1
+; and deliberately nothing at m.n.o.example.com.k.probe.example.com</code></pre>
+<p>Send from any public address:</p>
+<pre><code>MAIL FROM:&lt;alice@m.n.o.example.com&gt;
+RCPT TO:&lt;user@receiver.test&gt;</code></pre>
+<p>Required under RFC 7208 section 7.3: <code>%{d2}</code> expands to <code>example.com</code>, the name <code>example.com.k.probe.example.com</code> exists, the <code>exists:</code> mechanism matches and the result is <code>pass</code>. Observed on Rspamd: <code>R_SPF_FAIL</code>, because it queried <code>m.n.o.example.com.k.probe.example.com</code>, which does not exist. OpenDMARC's <code>SPFSelfValidate</code> on the identical setup returns <code>spf=pass</code>.</p>
+<p>Inverting the toggle completes the proof. Publish the A record at the untruncated name instead, and Rspamd returns <code>R_SPF_ALLOW</code> while OpenDMARC returns <code>spf=fail</code>.</p>
+
+<h2>Mitigation</h2>
+<p>Apply the transformer digit in the macro expander: after expanding the macro letter and splitting on the delimiter set, keep only the specified number of rightmost fields, per RFC 7208 section 7.3. The reversal and delimiter handling in the same expander are already correct, so the digit needs to be applied at the same point rather than parsed and discarded.</p>
+
+<h2>Notes</h2>
+<p>Distinct from the other SPF findings in this series. It is not a multi-record selection defect and not a temporary-error mapping defect; it sits in the macro transformer layer, which had not been exercised beyond plain <code>%{d}</code> and <code>%{o}</code>.</p>
+<p>The result is independent of the connecting address by construction, because <code>exists:</code> matches on name existence alone.</p>
+
+<h2>References</h2>
+<ul>
+<li><a href="https://www.rfc-editor.org/rfc/rfc7208#section-7.3">RFC 7208 section 7.3 - Macro Processing Details</a></li>
+<li><a href="https://www.rfc-editor.org/rfc/rfc7208#section-7.2">RFC 7208 section 7.2 - Macro Definitions</a></li>
+<li><a href="https://www.rfc-editor.org/rfc/rfc7208#section-5.7">RFC 7208 section 5.7 - exists</a></li>
+<li><a href="https://cwe.mitre.org/data/definitions/20.html">CWE-20: Improper Input Validation</a></li>
+<li><a href="https://rspamd.com/">Rspamd</a></li>
+<li><a href="https://weitongli.com/">Weitong Li, Virginia Tech - researcher homepage</a></li>
+</ul>
+
+<footer>
+<p>Reported by <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech
+(<a href="mailto:weitongli@vt.edu">weitongli@vt.edu</a>).
+Reproduction environment and full evidence available to the vendor on request.
+CVSS is the researcher's own assessment.</p>
+</footer>
+
+</body>
+</html>

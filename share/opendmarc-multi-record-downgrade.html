@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>OpenDMARC applies one record from a multi-record _dmarc set instead of discarding the set, enabling policy downgrade (OpenDMARC ≤ 1.4.2)</title>
+<style>
+:root { color-scheme: light dark; --fg:#111; --bg:#fff; --muted:#555; --rule:#ddd; --pre:#f5f5f5; --link:#14508c; }
+@media (prefers-color-scheme: dark) {
+  :root { --fg:#e4e4e4; --bg:#161616; --muted:#a0a0a0; --rule:#333; --pre:#1e1e1e; --link:#7fb2e5; }
+}
+body { max-width: 46rem; margin: 2.5rem auto; padding: 0 1.1rem 4rem; background: var(--bg); color: var(--fg);
+       font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+h1 { font-size: 1.35rem; line-height: 1.35; margin: 0 0 1rem; }
+h2 { font-size: 1.05rem; margin: 2rem 0 .6rem; }
+p, li { margin: .6rem 0; }
+a { color: var(--link); }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .87em; }
+pre { background: var(--pre); border: 1px solid var(--rule); padding: .75rem .85rem; overflow-x: auto;
+      font-size: .82rem; line-height: 1.45; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+table { border-collapse: collapse; width: 100%; font-size: .87rem; margin: .7rem 0; }
+th, td { border: 1px solid var(--rule); padding: .35rem .5rem; text-align: left; vertical-align: top; }
+.scroll { overflow-x: auto; }
+.hdr { font-size: .93rem; color: var(--muted); margin: 0 0 1.6rem; }
+.hdr b { color: var(--fg); font-weight: 600; }
+.lead { border-left: 3px solid var(--rule); padding-left: .85rem; margin: 0 0 1.6rem; }
+footer { margin-top: 3rem; padding-top: .8rem; border-top: 1px solid var(--rule);
+         color: var(--muted); font-size: .84rem; }
+</style>
+</head>
+<body>
+
+<h1>OpenDMARC applies one record from a multi-record _dmarc set instead of discarding the set, enabling policy downgrade (OpenDMARC ≤ 1.4.2)</h1>
+
+<p class="hdr">
+<b>Author:</b> <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech &lt;weitongli@vt.edu&gt;<br>
+<b>Date:</b> 2026-07-31<br>
+<b>Vendor:</b> <a href="http://www.trusteddomain.org/">The Trusted Domain Project</a><br>
+<b>Software:</b> <a href="https://github.com/trusteddomainproject/OpenDMARC">OpenDMARC</a><br>
+<b>Affected version:</b> OpenDMARC 1.4.2, built from the upstream tarball <code>rel-opendmarc-1-4-2</code>. The finding was originally isolated on the Debian package <code>1.4.2-1+deb12u1</code> and re-confirmed against pristine upstream. Earlier 1.4.x and 1.3.x releases are expected to share the behaviour.<br>
+<b>Vulnerable component:</b> DMARC policy discovery — multi-record handling, in <code>libopendmarc</code>'s <code>opendmarc_policy_query_dmarc()</code><br>
+<b>Vulnerability type:</b> CWE-290 (Authentication Bypass by Spoofing)<br>
+<b>Attack vector:</b> Remote. The attacker must be able to place a competing TXT record at the victim's <code>_dmarc</code> node, or to influence the order of the DNS response.<br>
+<b>CVSS v3.1:</b> 5.9 (Medium) &mdash; <code>CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:H/A:N</code><br>
+<b>Status:</b> Reproduced on 2026-07-28 against the current release (run <code>20260728-120957</code>) with a scripted reproducer, negative controls, and a second independent implementation as the differential oracle. 14 of 14 cases in the original run; the wire-order behaviour was separately characterised against a stock BIND 9 authoritative server.
+</p>
+
+<p class="lead"><b>Impact.</b> When two DMARC records exist at the same node, OpenDMARC applies whichever arrives first on the wire rather than treating the domain as having no policy.</p>
+
+<h2>Description</h2>
+<p>A DMARC policy downgrade. An actor who can publish a competing TXT record at the victim's <code>_dmarc</code> node flips receiver enforcement from <code>p=reject</code> or <code>p=quarantine</code> to <code>p=none</code>. Realistic routes to that position include a sub-delegated <code>_dmarc</code> zone served by a tenant, cache poisoning against a recursive resolver downstream of the receiver, and an on-path attacker between OpenDMARC and its configured nameserver.</p>
+<p>Success is probabilistic at roughly one in two against a random-ordering authoritative server, and higher where the attacker controls zone order or a cache. For a high-volume campaign, half is more than sufficient. The honest framing is a <em>probabilistic</em> policy downgrade, not a deterministic bypass.</p>
+<p>RFC 7489 section 6.6.3 states that if the remaining record set contains multiple records, <em>“processing terminates and the Mail Receiver takes no action”</em>; RFC 9989 section 4.7 restates it as a MUST NOT. The set is to be discarded and the domain treated as having no policy.</p>
+<p>OpenDMARC filters the TXT records for those beginning <code>v=DMARC1</code> and applies the first one its parser accepts, without checking whether the set is ambiguous. It then reports <code>dmarc=pass</code> or <code>dmarc=fail</code> computed from that single record's tags — a verdict the specification forbids from being produced at all.</p>
+<p>Which record is chosen was measured directly:</p>
+<div class="scroll">
+<table>
+<tr><th>Records published, in order</th><th>OpenDMARC verdict</th><th>Policy applied</th><th>Rspamd</th></tr>
+<tr><td><code>p=reject</code> (single, control)</td><td>dmarc=pass</td><td><code>p=reject</code></td><td>DMARC_POLICY_ALLOW</td></tr>
+<tr><td><code>p=none</code>, <code>p=reject</code></td><td>dmarc=pass</td><td><strong><code>p=none</code></strong></td><td>DMARC_BAD_POLICY</td></tr>
+<tr><td><code>p=reject</code>, <code>p=none</code></td><td>dmarc=pass</td><td><code>p=reject</code></td><td>DMARC_BAD_POLICY</td></tr>
+<tr><td><code>p=quarantine</code>, <code>p=none</code></td><td>dmarc=pass</td><td><code>p=quarantine</code></td><td>DMARC_BAD_POLICY</td></tr>
+<tr><td><code>p=none</code>, <code>p=quarantine</code>, <code>p=reject</code></td><td>dmarc=pass</td><td><strong><code>p=none</code></strong></td><td>DMARC_BAD_POLICY</td></tr>
+</table>
+</div>
+<p>The rule is “first DMARC1 record parsed from the DNS response”. Rspamd correctly emits <code>DMARC_BAD_POLICY</code> for any multi-record set.</p>
+<p><strong>Wire order in production is probabilistic.</strong> The behaviour was re-measured against a stock BIND 9 authoritative server carrying both records in its zone file, queried twelve times in succession:</p>
+<div class="scroll">
+<table>
+<tr><th>Record returned first</th><th>Count</th></tr>
+<tr><td><code>p=reject</code> first</td><td>7 of 12</td></tr>
+<tr><td><code>p=none</code> first</td><td>5 of 12</td></tr>
+</table>
+</div>
+<p>BIND 9's default <code>rrset-order</code> is random, as are NSD's and Knot DNS's. The specification violation is unconditional, but the downgrade lands on roughly half of queries against a typical authoritative server unless the attacker also controls zone order or an intermediate cache.</p>
+
+<h2>Proof of Concept</h2>
+<pre><code>_dmarc.victim.example.  IN  TXT  "v=DMARC1; p=none"
+_dmarc.victim.example.  IN  TXT  "v=DMARC1; p=reject"</code></pre>
+<p>Send a message with <code>From: alice@victim.example</code>. Required: the set is discarded, no policy is applied, and the verdict is <code>dmarc=none</code>. Observed on OpenDMARC:</p>
+<pre><code>Authentication-Results: receiver.test; dmarc=pass (p=none dis=none)
+    header.from=victim.example</code></pre>
+<p>The verifier picked the <code>p=none</code> record and applied it.</p>
+
+<h2>Mitigation</h2>
+<p>After filtering for records beginning <code>v=DMARC1</code>, if more than one remains, discard the set and treat the domain as having no policy, per RFC 7489 section 6.6.3 and RFC 9989 section 4.7. Emitting a diagnostic, as Rspamd's <code>DMARC_BAD_POLICY</code> does, helps operators find the misconfiguration.</p>
+
+<h2>Notes</h2>
+<p>The specification violation is unconditional and reproduces deterministically; the <em>exploitation</em> is probabilistic because the attacker cannot generally force wire order. Both facts are stated here deliberately so that the entry is not read as a deterministic bypass.</p>
+<p>OpenDMARC's manual page documents no option to enforce multi-record rejection, and the shipped default configuration does not do so.</p>
+
+<h2>References</h2>
+<ul>
+<li><a href="https://www.rfc-editor.org/rfc/rfc7489#section-6.6.3">RFC 7489 section 6.6.3 - Policy Discovery</a></li>
+<li><a href="https://www.rfc-editor.org/rfc/rfc9989">RFC 9989 section 4.7 - multiple DMARC records at the same node</a></li>
+<li><a href="https://cwe.mitre.org/data/definitions/290.html">CWE-290: Authentication Bypass by Spoofing</a></li>
+<li><a href="https://github.com/trusteddomainproject/OpenDMARC">OpenDMARC repository</a></li>
+<li><a href="https://weitongli.com/">Weitong Li, Virginia Tech - researcher homepage</a></li>
+</ul>
+
+<footer>
+<p>Reported by <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech
+(<a href="mailto:weitongli@vt.edu">weitongli@vt.edu</a>).
+Reproduction environment and full evidence available to the vendor on request.
+CVSS is the researcher's own assessment.</p>
+</footer>
+
+</body>
+</html>

@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>OpenDMARC maps a transient DNS failure on the SPF record lookup to spf=fail instead of temperror, turning a brief DNS outage into permanent mail loss (OpenDMARC ≤ 1.4.2)</title>
+<style>
+:root { color-scheme: light dark; --fg:#111; --bg:#fff; --muted:#555; --rule:#ddd; --pre:#f5f5f5; --link:#14508c; }
+@media (prefers-color-scheme: dark) {
+  :root { --fg:#e4e4e4; --bg:#161616; --muted:#a0a0a0; --rule:#333; --pre:#1e1e1e; --link:#7fb2e5; }
+}
+body { max-width: 46rem; margin: 2.5rem auto; padding: 0 1.1rem 4rem; background: var(--bg); color: var(--fg);
+       font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+h1 { font-size: 1.35rem; line-height: 1.35; margin: 0 0 1rem; }
+h2 { font-size: 1.05rem; margin: 2rem 0 .6rem; }
+p, li { margin: .6rem 0; }
+a { color: var(--link); }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .87em; }
+pre { background: var(--pre); border: 1px solid var(--rule); padding: .75rem .85rem; overflow-x: auto;
+      font-size: .82rem; line-height: 1.45; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+table { border-collapse: collapse; width: 100%; font-size: .87rem; margin: .7rem 0; }
+th, td { border: 1px solid var(--rule); padding: .35rem .5rem; text-align: left; vertical-align: top; }
+.scroll { overflow-x: auto; }
+.hdr { font-size: .93rem; color: var(--muted); margin: 0 0 1.6rem; }
+.hdr b { color: var(--fg); font-weight: 600; }
+.lead { border-left: 3px solid var(--rule); padding-left: .85rem; margin: 0 0 1.6rem; }
+footer { margin-top: 3rem; padding-top: .8rem; border-top: 1px solid var(--rule);
+         color: var(--muted); font-size: .84rem; }
+</style>
+</head>
+<body>
+
+<h1>OpenDMARC maps a transient DNS failure on the SPF record lookup to spf=fail instead of temperror, turning a brief DNS outage into permanent mail loss (OpenDMARC ≤ 1.4.2)</h1>
+
+<p class="hdr">
+<b>Author:</b> <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech &lt;weitongli@vt.edu&gt;<br>
+<b>Date:</b> 2026-07-31<br>
+<b>Vendor:</b> <a href="http://www.trusteddomain.org/">The Trusted Domain Project</a><br>
+<b>Software:</b> <a href="https://github.com/trusteddomainproject/OpenDMARC">OpenDMARC (SPFSelfValidate)</a><br>
+<b>Affected version:</b> OpenDMARC 1.4.2, built from the upstream tarball <code>rel-opendmarc-1-4-2</code>. The finding was originally isolated on the Debian package <code>1.4.2-1+deb12u1</code> and re-confirmed against pristine upstream. Earlier 1.4.x and 1.3.x releases are expected to share the behaviour.<br>
+<b>Vulnerable component:</b> SPF evaluation in <code>SPFSelfValidate</code> — the DNS error path for the initial TXT fetch of the sender's SPF record<br>
+<b>Vulnerability type:</b> CWE-754 (Improper Check for Unusual or Exceptional Conditions)<br>
+<b>Attack vector:</b> Remote, and no attacker is required: any transient failure at the sending domain's authoritative name servers triggers it. An attacker able to disrupt those servers — a flood, a rate-limit trip, or a DNSSEC mis-signing they can provoke — can trigger it deliberately against a chosen sender.<br>
+<b>CVSS v3.1:</b> 5.9 (Medium) &mdash; <code>CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:N/A:H</code><br>
+<b>Status:</b> Reproduced on 2026-07-28 against the current release (run <code>20260728-120957</code>) with a scripted reproducer, negative controls, and a second independent implementation as the differential oracle. Confirmed for SERVFAIL, REFUSED and timeout under DNS fault injection, with a served-record control and with OpenDMARC's own correct handling of a sub-lookup failure as the internal oracle.
+</p>
+
+<p class="lead"><b>Impact.</b> A SERVFAIL, REFUSED or timeout on the sender's own v=spf1 lookup is reported as a permanent spf=fail, so under p=reject legitimate mail is rejected rather than deferred for retry.</p>
+
+<h2>Description</h2>
+<p>A denial of validation that fails closed. For a message authenticated by SPF alone, with no DKIM signature, <code>spf=fail</code> produces <code>dmarc=fail</code>, and under the sending domain's own <code>p=reject</code> the receiver rejects permanently. The sending domain therefore loses legitimate mail outright during any transient failure of its authoritative DNS, where the specified <code>temperror</code> would have caused a deferral and successful delivery on retry.</p>
+<p>Transient SERVFAIL, REFUSED and timeout conditions are routine in operation: DNSSEC signing mistakes, rate-limited or overloaded authoritative servers, anycast route changes and brief network partitions all produce them, typically for minutes. On OpenDMARC receivers each such window converts into bounced mail rather than delayed mail, and the bounce is attributed to the sending domain's own published policy, which makes the cause hard to diagnose from either end.</p>
+<p>The exposure is not attacker-driven in the usual sense, but it is attacker-reachable: anyone able to push a target's authoritative servers into SERVFAIL or rate-limiting for a short period can cause that target's mail to be rejected rather than queued during the window.</p>
+<p>RFC 7208 section 2.6.7 defines <code>temperror</code> as the result to be returned when the evaluation could not be completed because of a transient condition, and section 4.4 places the initial fetch of the sender's SPF record squarely in that category: a DNS error other than “no record” is a transient failure and the receiver is expected to defer and retry.</p>
+<p>OpenDMARC's <code>SPFSelfValidate</code> returns <code>spf=fail</code> for these instead. A failure to obtain the record is treated as though the record had been obtained and had evaluated to a no-match against <code>-all</code>. The result is permanent where the specification requires a temporary one, and the consequence is that a brief DNS blip at the sender becomes a hard rejection at every OpenDMARC receiver.</p>
+<p>With the connecting client at <code>198.51.100.10</code> and the sender's record either served or faulted, all else held constant:</p>
+<div class="scroll">
+<table>
+<tr><th>Lookup of the sender's TXT (SPF) record</th><th>OpenDMARC</th><th>Rspamd</th><th>Required by RFC 7208</th></tr>
+<tr><td>served as <code>v=spf1 ip4:203.0.113.9 -all</code>, client does not match (control)</td><td>spf=fail</td><td><code>R_SPF_FAIL</code></td><td>fail (consensus)</td></tr>
+<tr><td><strong>SERVFAIL</strong></td><td><strong>spf=fail</strong></td><td><code>R_SPF_DNSFAIL</code></td><td><strong>temperror</strong></td></tr>
+<tr><td><strong>REFUSED</strong></td><td><strong>spf=fail</strong></td><td><code>R_SPF_DNSFAIL</code></td><td><strong>temperror</strong></td></tr>
+<tr><td><strong>timeout</strong></td><td><strong>spf=fail</strong></td><td><code>R_SPF_DNSFAIL</code></td><td><strong>temperror</strong></td></tr>
+</table>
+</div>
+<p>The served control matters: it shows that the rig reaches a genuine <code>fail</code> by the ordinary route, so the faulted rows are not simply the rig failing to evaluate at all.</p>
+<p><strong>OpenDMARC is self-inconsistent, and that is the strongest evidence here.</strong> The implementation does have a temporary-error path, and it uses it correctly — but only for lookups performed <em>during</em> evaluation, not for the fetch of the record itself. The same SERVFAIL, from the same resolver, in the same verifier, is mapped two different ways depending only on which lookup encountered it:</p>
+<div class="scroll">
+<table>
+<tr><th>Scenario</th><th>OpenDMARC result</th><th>Correct?</th></tr>
+<tr><td><code>v=spf1 exists:exists.%{d} -all</code> is fetched successfully, and the <code>exists:</code> target lookup SERVFAILs</td><td><code>spf=tempfail</code></td><td>yes</td></tr>
+<tr><td>the sender's own <code>v=spf1</code> record lookup SERVFAILs</td><td><strong><code>spf=fail</code></strong></td><td><strong>no</strong></td></tr>
+</table>
+</div>
+<p>Because the in-evaluation path returns a temporary error as required, the defect cannot be explained as a deliberate design choice to avoid deferrals, nor as a missing capability. It is localised to the record-fetch error path, which conflates “the record could not be fetched” with “the record was fetched and did not authorise this client”.</p>
+
+<h2>Proof of Concept</h2>
+<p>Publish, for a sending domain, and configure the authoritative server so the fault can be toggled for the TXT lookup of <code>sender.example</code> alone:</p>
+<pre><code>sender.example.        IN TXT "v=spf1 ip4:203.0.113.9 -all"
+_dmarc.sender.example. IN TXT "v=DMARC1; p=reject; aspf=r; adkim=s"</code></pre>
+<p>Send an unsigned message with <code>From: billing@sender.example</code> and <code>MAIL FROM:&lt;billing@sender.example&gt;</code>, first with the record served and then with the authoritative server answering SERVFAIL for that one name:</p>
+<pre><code>MAIL FROM:&lt;billing@sender.example&gt;
+RCPT TO:&lt;user@receiver.test&gt;
+DATA
+From: billing@sender.example
+To: user@receiver.test
+Subject: monthly statement
+
+...
+.</code></pre>
+<p>Required under RFC 7208 sections 2.6.7 and 4.4 in the faulted case: <code>spf=temperror</code>, which propagates to a DMARC temporary error and a 4xx deferral, so the message is retried and delivered once DNS recovers. Observed on OpenDMARC: <code>spf=fail</code>, hence <code>dmarc=fail</code>, hence a permanent rejection under <code>p=reject</code>. Rspamd on the identical transaction returns <code>R_SPF_DNSFAIL</code> and defers.</p>
+<p>Because the record cannot be fetched at all in the faulted case, the connecting address is not consulted, so a host the record <em>does</em> authorise receives the same <code>spf=fail</code>. That is the shape of the harm: mail that would have passed SPF a second earlier is rejected outright.</p>
+<p>The self-inconsistency is reproduced with the same rig by serving <code>sender.example. IN TXT "v=spf1 exists:exists.%{d} -all"</code> successfully and faulting only <code>exists.sender.example</code>, which yields <code>spf=tempfail</code>.</p>
+
+<h2>Mitigation</h2>
+<p>In the record-fetch path, distinguish a DNS error from a successful lookup that returned no record. A SERVFAIL, REFUSED, timeout or other transient resolver failure must yield <code>temperror</code>, per RFC 7208 sections 2.6.7 and 4.4; only <code>NXDOMAIN</code> or a successful answer containing no <code>v=spf1</code> record yields <code>none</code>, and only a completed evaluation yields <code>fail</code>.</p>
+<p>The temporary-error path already exists and is already reached correctly from the in-evaluation lookups, so the change is to route the record-fetch error into it rather than into the no-match result.</p>
+
+<h2>Notes</h2>
+<p>The counterpart defect in the DMARC record lookup fails in the opposite direction: a transient failure there yields <code>dmarc=none</code> and lets forgeries through. Both share one root theme, which is that OpenDMARC has no proper temporary-error path for the record lookups themselves, and they are best fixed together.</p>
+<p>No claim is made here that an attacker gains authentication they should not have. The direction is strictly fail-closed, and the entry is filed as a conformance and availability defect for that reason.</p>
+
+<h2>References</h2>
+<ul>
+<li><a href="https://www.rfc-editor.org/rfc/rfc7208#section-2.6.7">RFC 7208 section 2.6.7 - temperror</a></li>
+<li><a href="https://www.rfc-editor.org/rfc/rfc7208#section-4.4">RFC 7208 section 4.4 - Record Lookup</a></li>
+<li><a href="https://www.rfc-editor.org/rfc/rfc7489#section-6.6.2">RFC 7489 section 6.6.2 - Determine Handling Policy</a></li>
+<li><a href="https://cwe.mitre.org/data/definitions/754.html">CWE-754: Improper Check for Unusual or Exceptional Conditions</a></li>
+<li><a href="https://github.com/trusteddomainproject/OpenDMARC">OpenDMARC repository</a></li>
+<li><a href="https://weitongli.com/">Weitong Li, Virginia Tech - researcher homepage</a></li>
+</ul>
+
+<footer>
+<p>Reported by <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech
+(<a href="mailto:weitongli@vt.edu">weitongli@vt.edu</a>).
+Reproduction environment and full evidence available to the vendor on request.
+CVSS is the researcher's own assessment.</p>
+</footer>
+
+</body>
+</html>

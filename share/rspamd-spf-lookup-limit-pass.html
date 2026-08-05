@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Rspamd returns SPF pass instead of permerror when the DNS lookup limit is exceeded, bypassing SPF authorisation (Rspamd ≤ 4.1.2)</title>
+<style>
+:root { color-scheme: light dark; --fg:#111; --bg:#fff; --muted:#555; --rule:#ddd; --pre:#f5f5f5; --link:#14508c; }
+@media (prefers-color-scheme: dark) {
+  :root { --fg:#e4e4e4; --bg:#161616; --muted:#a0a0a0; --rule:#333; --pre:#1e1e1e; --link:#7fb2e5; }
+}
+body { max-width: 46rem; margin: 2.5rem auto; padding: 0 1.1rem 4rem; background: var(--bg); color: var(--fg);
+       font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+h1 { font-size: 1.35rem; line-height: 1.35; margin: 0 0 1rem; }
+h2 { font-size: 1.05rem; margin: 2rem 0 .6rem; }
+p, li { margin: .6rem 0; }
+a { color: var(--link); }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .87em; }
+pre { background: var(--pre); border: 1px solid var(--rule); padding: .75rem .85rem; overflow-x: auto;
+      font-size: .82rem; line-height: 1.45; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+table { border-collapse: collapse; width: 100%; font-size: .87rem; margin: .7rem 0; }
+th, td { border: 1px solid var(--rule); padding: .35rem .5rem; text-align: left; vertical-align: top; }
+.scroll { overflow-x: auto; }
+.hdr { font-size: .93rem; color: var(--muted); margin: 0 0 1.6rem; }
+.hdr b { color: var(--fg); font-weight: 600; }
+.lead { border-left: 3px solid var(--rule); padding-left: .85rem; margin: 0 0 1.6rem; }
+footer { margin-top: 3rem; padding-top: .8rem; border-top: 1px solid var(--rule);
+         color: var(--muted); font-size: .84rem; }
+</style>
+</head>
+<body>
+
+<h1>Rspamd returns SPF pass instead of permerror when the DNS lookup limit is exceeded, bypassing SPF authorisation (Rspamd ≤ 4.1.2)</h1>
+
+<p class="hdr">
+<b>Author:</b> <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech &lt;weitongli@vt.edu&gt;<br>
+<b>Date:</b> 2026-07-31<br>
+<b>Vendor:</b> <a href="https://rspamd.com/">Rspamd project (Vsevolod Stakhov)</a><br>
+<b>Software:</b> <a href="https://github.com/rspamd/rspamd">Rspamd</a><br>
+<b>Affected version:</b> Rspamd 4.1.2. Originally isolated on 3.10.2 and re-confirmed on 4.1.2 on 2026-07-28.<br>
+<b>Vulnerable component:</b> SPF module — the DNS-lookup processing limit, in the <code>parse_spf_include</code> path<br>
+<b>Vulnerability type:</b> CWE-755 (Improper Handling of Exceptional Conditions) leading to CWE-290 (Authentication Bypass by Spoofing)<br>
+<b>Attack vector:</b> Remote, unauthenticated. The attacker publishes the SPF record at a domain they control.<br>
+<b>CVSS v3.1:</b> 7.5 (High) &mdash; <code>CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:N</code><br>
+<b>Status:</b> Reproduced on 2026-07-28 against the current release (run <code>20260728-120957</code>) with a scripted reproducer, negative controls, and a second independent implementation as the differential oracle. A 22-case sweep with boundary and negative controls, plus a root-cause log line.
+</p>
+
+<p class="lead"><b>Impact.</b> Padding an SPF record with eleven or more lookups before an authorising ip4 makes Rspamd skip the limit and return pass.</p>
+
+<h2>Description</h2>
+<p>An SPF authorisation bypass. The attacker publishes eleven or more padding lookups, or a self-<code>include</code> loop, before an <code>ip4</code> that authorises their sending host. A conforming verifier returns <code>permerror</code>, meaning no authorisation was established; Rspamd returns <code>pass</code>.</p>
+<p>The consequence carries into DMARC: under <code>aspf=r</code> an SPF pass aligned with the From domain produces <code>dmarc=pass</code>, so a message that should have had no SPF authorisation at all becomes a DMARC-authenticated message. The processing limit exists specifically to prevent crafted records from steering evaluation, which is the case section 11.1 calls out.</p>
+<p>RFC 7208 section 4.6.4 is a MUST: an implementation must limit the DNS-querying terms (<code>include</code>, <code>a</code>, <code>mx</code>, <code>ptr</code>, <code>exists</code>, <code>redirect</code>) to ten, and <em>“if this limit is exceeded, the implementation MUST return permerror”</em>. Section 11.1 names crafted limit-exceeding records as precisely the attack this defends against, and section 5.2 requires an <code>include</code> that evaluates to <code>permerror</code> to propagate it.</p>
+<p>Rspamd treats “lookup limit exceeded inside a term” as a soft skip of that term and carries on evaluating left to right. A later authorising <code>ip4</code> then matches and the result is <code>pass</code>.</p>
+<p>The debug log is unambiguous — the limit is detected and then the record authorises anyway:</p>
+<pre><code>parse_spf_include: spf dns requests limit: 31 &gt; 30 is reached
+...
+R_SPF_ALLOW{+ip4:203.0.113.7}</code></pre>
+<div class="scroll">
+<table>
+<tr><th>Sender's SPF record</th><th>OpenDMARC</th><th>Rspamd</th></tr>
+<tr><td><code>include</code> self-loop, then a matching <code>ip4</code></td><td>fail</td><td><strong>pass — fail-open</strong></td></tr>
+<tr><td><code>include</code> self-loop, then a non-matching <code>ip4</code> (negative control)</td><td>fail</td><td>fail</td></tr>
+<tr><td><code>include</code> self-loop, then <code>-all</code> only</td><td>fail</td><td>fail</td></tr>
+<tr><td><code>exists</code> × 10, then an authorising term (in budget, control)</td><td>pass</td><td>pass</td></tr>
+<tr><td><code>exists</code> × 11, then an authorising term</td><td>pass</td><td>pass</td></tr>
+<tr><td><code>exists</code> × 12, then an authorising term</td><td>fail</td><td><strong>pass — fail-open</strong></td></tr>
+<tr><td><code>exists</code> × 13, 14, 15, then an authorising term</td><td>fail</td><td><strong>pass — fail-open</strong></td></tr>
+<tr><td><code>include</code> chain of depth 10–15 terminating in <code>-all</code></td><td>fail</td><td>fail (consensus)</td></tr>
+<tr><td><code>exists</code> × N, all NXDOMAIN, no authorising mechanism</td><td>fail</td><td>fail (consensus)</td></tr>
+</table>
+</div>
+<p>The controls hold throughout. A ten-lookup chain with an authorising terminal passes on both, so the rig genuinely authorises within budget; the same chain with <code>-all</code> fails on both; and a non-matching deep IP on the self-loop makes Rspamd return <code>fail</code>, which proves the <code>pass</code> genuinely originates from the post-limit <code>ip4</code> rather than from a loop-handling default.</p>
+<p>OpenDMARC's own ceiling is approximately eleven terms rather than the specified ten, but it does enforce a ceiling and fails closed past it. Rspamd enforces no ceiling in the matching path, up to its unrelated 30-request denial-of-service guard.</p>
+
+<h2>Proof of Concept</h2>
+<p>Publish, at a domain the attacker controls:</p>
+<pre><code>attacker.example.  IN  TXT  "v=spf1 exists:a1.%{d} exists:a2.%{d} exists:a3.%{d}
+                              exists:a4.%{d} exists:a5.%{d} exists:a6.%{d}
+                              exists:a7.%{d} exists:a8.%{d} exists:a9.%{d}
+                              exists:a10.%{d} exists:a11.%{d} exists:a12.%{d}
+                              ip4:203.0.113.7 -all"</code></pre>
+<p>with all twelve <code>exists</code> targets NXDOMAIN, then send mail from <code>203.0.113.7</code>. The self-<code>include</code> form works equally well:</p>
+<pre><code>attacker.example.  IN  TXT  "v=spf1 include:attacker.example ip4:203.0.113.7 -all"</code></pre>
+<p>Required: <code>permerror</code>, that is, no SPF authorisation. Observed on Rspamd: <code>spf=pass</code> / <code>R_SPF_ALLOW</code>.</p>
+
+<h2>Mitigation</h2>
+<p>When the querying-term budget is exhausted inside a term, abort the whole evaluation and return <code>permerror</code>, rather than skipping the term and continuing. Propagate <code>permerror</code> out of a nested <code>include</code> per section 5.2, and set the limit at ten as specified.</p>
+
+<h2>Notes</h2>
+<p>A separate consensus gap, recorded but not claimed as a divergence: the void-lookup limit (section 4.6.4, at most two NXDOMAIN or NODATA lookups before <code>permerror</code>) is unenforced on <em>both</em> verifiers. That is a shared weakness rather than a difference between them.</p>
+<p>Rspamd skips SPF entirely for a private connecting address, so the test rig supplied a public <code>ip=</code>; the sender domain was regenerated per run because Rspamd caches SPF results for 300 seconds.</p>
+
+<h2>References</h2>
+<ul>
+<li><a href="https://www.rfc-editor.org/rfc/rfc7208#section-4.6.4">RFC 7208 section 4.6.4 - DNS Lookup Limits</a></li>
+<li><a href="https://www.rfc-editor.org/rfc/rfc7208#section-5.2">RFC 7208 section 5.2 - include</a></li>
+<li><a href="https://www.rfc-editor.org/rfc/rfc7208#section-11.1">RFC 7208 section 11.1 - Processing Limits (security considerations)</a></li>
+<li><a href="https://cwe.mitre.org/data/definitions/755.html">CWE-755: Improper Handling of Exceptional Conditions</a></li>
+<li><a href="https://rspamd.com/">Rspamd</a></li>
+<li><a href="https://weitongli.com/">Weitong Li, Virginia Tech - researcher homepage</a></li>
+</ul>
+
+<footer>
+<p>Reported by <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech
+(<a href="mailto:weitongli@vt.edu">weitongli@vt.edu</a>).
+Reproduction environment and full evidence available to the vendor on request.
+CVSS is the researcher's own assessment.</p>
+</footer>
+
+</body>
+</html>

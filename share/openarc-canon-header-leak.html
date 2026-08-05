@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>OpenARC memory leak in arc_canon_runheaders(): the dynamic string allocated for canonicalisation is never freed (OpenARC (master))</title>
+<style>
+:root { color-scheme: light dark; --fg:#111; --bg:#fff; --muted:#555; --rule:#ddd; --pre:#f5f5f5; --link:#14508c; }
+@media (prefers-color-scheme: dark) {
+  :root { --fg:#e4e4e4; --bg:#161616; --muted:#a0a0a0; --rule:#333; --pre:#1e1e1e; --link:#7fb2e5; }
+}
+body { max-width: 46rem; margin: 2.5rem auto; padding: 0 1.1rem 4rem; background: var(--bg); color: var(--fg);
+       font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+h1 { font-size: 1.35rem; line-height: 1.35; margin: 0 0 1rem; }
+h2 { font-size: 1.05rem; margin: 2rem 0 .6rem; }
+p, li { margin: .6rem 0; }
+a { color: var(--link); }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .87em; }
+pre { background: var(--pre); border: 1px solid var(--rule); padding: .75rem .85rem; overflow-x: auto;
+      font-size: .82rem; line-height: 1.45; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+table { border-collapse: collapse; width: 100%; font-size: .87rem; margin: .7rem 0; }
+th, td { border: 1px solid var(--rule); padding: .35rem .5rem; text-align: left; vertical-align: top; }
+.scroll { overflow-x: auto; }
+.hdr { font-size: .93rem; color: var(--muted); margin: 0 0 1.6rem; }
+.hdr b { color: var(--fg); font-weight: 600; }
+.lead { border-left: 3px solid var(--rule); padding-left: .85rem; margin: 0 0 1.6rem; }
+footer { margin-top: 3rem; padding-top: .8rem; border-top: 1px solid var(--rule);
+         color: var(--muted); font-size: .84rem; }
+</style>
+</head>
+<body>
+
+<h1>OpenARC memory leak in arc_canon_runheaders(): the dynamic string allocated for canonicalisation is never freed (OpenARC (master))</h1>
+
+<p class="hdr">
+<b>Author:</b> <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech &lt;weitongli@vt.edu&gt;<br>
+<b>Date:</b> 2026-07-31<br>
+<b>Vendor:</b> <a href="http://www.trusteddomain.org/">The Trusted Domain Project</a><br>
+<b>Software:</b> <a href="https://github.com/trusteddomainproject/OpenARC">OpenARC (libopenarc)</a><br>
+<b>Affected version:</b> Current upstream <code>master</code>.<br>
+<b>Vulnerable component:</b> <code>libopenarc/arc-canon.c</code>, <code>arc_canon_runheaders()</code>; the allocation from <code>arc_dstring_new()</code> is not released by <code>arc_free()</code><br>
+<b>Vulnerability type:</b> CWE-401 (Missing Release of Memory after Effective Lifetime)<br>
+<b>Attack vector:</b> Remote. Leaks once per ARC-verified message; forwarded mail carries ARC chains by design.<br>
+<b>CVSS v3.1:</b> 5.3 (Medium) &mdash; <code>CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L</code><br>
+<b>Status:</b> LeakSanitizer-confirmed.
+</p>
+
+<p class="lead"><b>Impact.</b> Every ARC-verified message leaks a dynamic string, so memory grows in proportion to forwarded-mail volume.</p>
+
+<h2>Description</h2>
+<p>Unbounded memory growth in a long-lived OpenARC verifier that processes forwarded mail, ending in resource exhaustion. It is slow and requires sustained volume, so it is the least severe finding in this set, but it needs no malformed input at all: legitimate traffic alone drives it.</p>
+<p>A dynamic string allocated during header canonicalisation in <code>arc_canon_runheaders()</code> is never released, and <code>arc_free()</code> does not reclaim it. Because canonicalisation runs for every ARC-verified message, the leak is steady and proportional to the volume of forwarded mail the verifier handles.</p>
+<p>LeakSanitizer reports a definite leak rooted at the allocation:</p>
+<pre><code>==ERROR== LeakSanitizer: detected memory leaks
+  Direct leak of N byte(s) in M object(s) allocated from:
+    ... arc_dstring_new &lt;- arc_canon_runheaders ...</code></pre>
+<p>There is no malformed-input precondition. Any well-formed ARC instance that completes header canonicalisation leaks the string, so ordinary legitimate forwarded mail drives the growth.</p>
+
+<h2>Proof of Concept</h2>
+<pre><code>export BUILD="$HOME/asan-build"
+bash lib/build_openarc.sh
+ASAN_OPTIONS=detect_leaks=1 "$BUILD/fuzz_openarc" memory-safety/seeds/C7-arc-crash
+
+# run over a corpus of well-formed ARC messages to show steady per-message growth
+ASAN_OPTIONS=detect_leaks=1 "$BUILD/fuzz_openarc" corpus_arc/</code></pre>
+
+<h2>Mitigation</h2>
+<p>Free the <code>arc_dstring</code> in <code>arc_free()</code>, or release it at the end of canonicalisation once it is no longer needed.</p>
+
+<h2>Notes</h2>
+<p>Pairs with the null-pointer dereference <code>openarc-c-tag-null-deref</code> in the same ARC and forwarding code path, which appears less exercised than the equivalent DKIM path. Re-confirmation against the current OpenARC release is outstanding.</p>
+
+<h2>References</h2>
+<ul>
+<li><a href="https://www.rfc-editor.org/rfc/rfc8617">RFC 8617 - The Authenticated Received Chain (ARC) Protocol</a></li>
+<li><a href="https://cwe.mitre.org/data/definitions/401.html">CWE-401: Missing Release of Memory after Effective Lifetime</a></li>
+<li><a href="https://github.com/trusteddomainproject/OpenARC">OpenARC repository</a></li>
+<li><a href="https://weitongli.com/">Weitong Li, Virginia Tech - researcher homepage</a></li>
+</ul>
+
+<footer>
+<p>Reported by <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech
+(<a href="mailto:weitongli@vt.edu">weitongli@vt.edu</a>).
+Reproduction environment and full evidence available to the vendor on request.
+CVSS is the researcher's own assessment.</p>
+</footer>
+
+</body>
+</html>

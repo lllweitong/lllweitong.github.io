@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>OpenDMARC returns permerror for a malformed optional DMARC tag, silently disabling the record&#x27;s p=reject (OpenDMARC ≤ 1.4.2)</title>
+<style>
+:root { color-scheme: light dark; --fg:#111; --bg:#fff; --muted:#555; --rule:#ddd; --pre:#f5f5f5; --link:#14508c; }
+@media (prefers-color-scheme: dark) {
+  :root { --fg:#e4e4e4; --bg:#161616; --muted:#a0a0a0; --rule:#333; --pre:#1e1e1e; --link:#7fb2e5; }
+}
+body { max-width: 46rem; margin: 2.5rem auto; padding: 0 1.1rem 4rem; background: var(--bg); color: var(--fg);
+       font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+h1 { font-size: 1.35rem; line-height: 1.35; margin: 0 0 1rem; }
+h2 { font-size: 1.05rem; margin: 2rem 0 .6rem; }
+p, li { margin: .6rem 0; }
+a { color: var(--link); }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .87em; }
+pre { background: var(--pre); border: 1px solid var(--rule); padding: .75rem .85rem; overflow-x: auto;
+      font-size: .82rem; line-height: 1.45; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+table { border-collapse: collapse; width: 100%; font-size: .87rem; margin: .7rem 0; }
+th, td { border: 1px solid var(--rule); padding: .35rem .5rem; text-align: left; vertical-align: top; }
+.scroll { overflow-x: auto; }
+.hdr { font-size: .93rem; color: var(--muted); margin: 0 0 1.6rem; }
+.hdr b { color: var(--fg); font-weight: 600; }
+.lead { border-left: 3px solid var(--rule); padding-left: .85rem; margin: 0 0 1.6rem; }
+footer { margin-top: 3rem; padding-top: .8rem; border-top: 1px solid var(--rule);
+         color: var(--muted); font-size: .84rem; }
+</style>
+</head>
+<body>
+
+<h1>OpenDMARC returns permerror for a malformed optional DMARC tag, silently disabling the record's p=reject (OpenDMARC ≤ 1.4.2)</h1>
+
+<p class="hdr">
+<b>Author:</b> <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech &lt;weitongli@vt.edu&gt;<br>
+<b>Date:</b> 2026-07-31<br>
+<b>Vendor:</b> <a href="http://www.trusteddomain.org/">The Trusted Domain Project</a><br>
+<b>Software:</b> <a href="https://github.com/trusteddomainproject/OpenDMARC">OpenDMARC</a><br>
+<b>Affected version:</b> OpenDMARC 1.4.2, built from the upstream tarball <code>rel-opendmarc-1-4-2</code>. The finding was originally isolated on the Debian package <code>1.4.2-1+deb12u1</code> and re-confirmed against pristine upstream. Earlier 1.4.x and 1.3.x releases are expected to share the behaviour.<br>
+<b>Vulnerable component:</b> DMARC record parsing and tag validation<br>
+<b>Vulnerability type:</b> CWE-755 (Improper Handling of Exceptional Conditions)<br>
+<b>Attack vector:</b> Remote, unauthenticated. No attacker action against DNS is needed when the victim's record already carries a typo; otherwise the attacker must be able to influence the record.<br>
+<b>CVSS v3.1:</b> 7.5 (High) &mdash; <code>CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:N</code><br>
+<b>Status:</b> Reproduced on 2026-07-28 against the current release (run <code>20260728-120957</code>) with a scripted reproducer, negative controls, and a second independent implementation as the differential oracle. All 12 tested malformations diverged: OpenDMARC <code>permerror</code> against Rspamd <code>pass</code>.
+</p>
+
+<p class="lead"><b>Impact.</b> A typo in a reporting-only tag such as fo=9 voids the whole policy, so spoofed mail in the domain's name passes.</p>
+
+<h2>Description</h2>
+<p>Any domain publishing <code>p=reject</code> with a minor typo in an optional tag is unprotected on every OpenDMARC receiver, while Rspamd, Gmail and other conforming verifiers still enforce the policy.</p>
+<p>The failure is silent from the domain owner's side. Their own aligned mail continues to be delivered, now stamped <code>permerror</code>, and nothing is rejected, so there is no operational signal that protection has been lost. Malformed optional tags are common in published records (<code>pct</code> typos, <code>fo</code>/<code>rf</code>/<code>ri</code> mistakes, stray characters), which makes this a broad and quiet erosion of DMARC coverage rather than a corner case.</p>
+<p>Where an attacker can influence the record — a hostile sub-delegate, a compromised registrar interface, a template that appends a tag — appending one malformed optional tag is a direct, deliberate way to disable the victim's policy.</p>
+<p>RFC 7489 section 6.3 states that once <code>v=</code> and <code>p=</code> are valid, <em>“syntax errors in the remainder of the record SHOULD be discarded ... or ignored outright”</em>, and that unsupported report URIs MUST be ignored. Section 6.6.3 evaluates the <code>p</code> and <code>sp</code> policy.</p>
+<p>OpenDMARC instead treats any tag with an invalid value as a fatal parse error and returns <code>dmarc=permerror</code> for the entire record. Since <code>permerror</code> is not <code>fail</code>, the reject policy is never applied. The protection is switched off by a typo in a tag that has no bearing on the authentication verdict at all.</p>
+<p>With a valid <code>v=DMARC1; p=reject</code> prefix and one malformed optional tag appended, on an aligned DKIM-passing message:</p>
+<div class="scroll">
+<table>
+<tr><th>Record (after <code>v=DMARC1; p=reject;</code>)</th><th>OpenDMARC</th><th>Rspamd</th><th>Required</th></tr>
+<tr><td><em>(no extra tag, baseline)</em></td><td>pass</td><td>pass</td><td>pass</td></tr>
+<tr><td><code>fo=1</code>, <code>rf=afrf</code>, <code>ri=86400</code>, <code>pct=50</code>, <code>sp=none</code> (all valid)</td><td>pass</td><td>pass</td><td>pass</td></tr>
+<tr><td><code>fo=9</code> (invalid, reporting only)</td><td><strong>permerror</strong></td><td>pass</td><td>pass</td></tr>
+<tr><td><code>rf=xml</code> (invalid, reporting only)</td><td><strong>permerror</strong></td><td>pass</td><td>pass</td></tr>
+<tr><td><code>ri=abc</code> (invalid, reporting only)</td><td><strong>permerror</strong></td><td>pass</td><td>pass</td></tr>
+<tr><td><code>pct=256</code> / <code>pct=-1</code> (out of 0–100)</td><td><strong>permerror</strong></td><td>pass</td><td>pass</td></tr>
+<tr><td><code>sp=foo</code>, <code>adkim=x</code>, <code>aspf=2</code> (invalid enumerations)</td><td><strong>permerror</strong></td><td>pass</td><td>pass</td></tr>
+<tr><td><code>rua=mailto:a; rua=mailto:b</code> (duplicate key)</td><td><strong>permerror</strong></td><td>pass</td><td>pass</td></tr>
+<tr><td><code>fo=x</code>, <code>fo=0:1:9</code>, <code>rf=afrf:bogus</code> (bad list member)</td><td><strong>permerror</strong></td><td>pass</td><td>pass</td></tr>
+<tr><td>a single malformed <code>rua=</code> value (<code>notauri</code>, <code>@@@</code>, <code>http://x</code>, oversized list)</td><td>pass</td><td>pass</td><td>pass</td></tr>
+</table>
+</div>
+<p>The <code>fo</code>, <code>rf</code> and <code>ri</code> rows are the clearest cases: these are failure-reporting tags with no authentication semantics whatsoever, and one bad character in their value voids the entire <code>p=reject</code>.</p>
+<p>OpenDMARC's report-address tolerance is per value, not per record. A single malformed <code>rua=</code> or <code>ruf=</code> value is accepted, but a duplicate <code>rua=</code> or <code>ruf=</code> key trips the permerror. Tag ordering makes no difference: a bad <code>fo</code> before or after <code>p=</code> behaves identically.</p>
+
+<h2>Proof of Concept</h2>
+<p>Publish, at a victim domain:</p>
+<pre><code>_dmarc.victim.example.  IN  TXT  "v=DMARC1; p=reject; fo=9"</code></pre>
+<p>Send a forged, unaligned message with <code>From: ceo@victim.example</code>, no DKIM signature, and an envelope sender in a different domain. Compare against the clean control record <code>v=DMARC1; p=reject</code>:</p>
+<div class="scroll">
+<table>
+<tr><th><code>_dmarc.victim.example</code></th><th>OpenDMARC verdict on the forgery</th><th>Outcome</th></tr>
+<tr><td><code>v=DMARC1; p=reject</code></td><td><code>dmarc=fail</code></td><td>forgery caught</td></tr>
+<tr><td><code>v=DMARC1; p=reject; fo=9</code></td><td><code>dmarc=permerror</code></td><td><strong>forgery delivered</strong></td></tr>
+<tr><td><code>v=DMARC1; p=reject; rf=xml</code></td><td><code>dmarc=permerror</code></td><td><strong>forgery delivered</strong></td></tr>
+<tr><td><code>v=DMARC1; p=reject; pct=256</code></td><td><code>dmarc=permerror</code></td><td><strong>forgery delivered</strong></td></tr>
+</table>
+</div>
+<p>The delivered header carries no disposition, confirming that no policy was applied:</p>
+<pre><code>Authentication-Results: receiver.test; dmarc=permerror header.from=victim.example</code></pre>
+
+<h2>Mitigation</h2>
+<p>Once <code>v=</code> and <code>p=</code> parse correctly, discard or ignore unparseable optional tags and continue to apply the policy, per section 6.3. Reserve <code>permerror</code> for records where the required tags themselves are absent or invalid. Unsupported report URIs must be ignored rather than treated as fatal, and a duplicate <code>rua</code>/<code>ruf</code> key should not be more fatal than a malformed value of the same tag.</p>
+
+<h2>Notes</h2>
+<p>Distinct from the multi-record and record-discovery findings: this is a single, correctly discovered record that parses to <code>permerror</code> purely because of an optional tag's value.</p>
+<p>The root cause is over-strictness that becomes a fail-open one layer later: the parser fails closed to <code>permerror</code>, and <code>permerror</code> then fails open at the enforcement layer. See also <code>opendmarc-subdomain-walk-abort</code> (the same mishandling aborting the walk to the organisational domain) and <code>dmarc-pct-integer-handling</code> (the numeric edge cases of <code>pct</code>).</p>
+
+<h2>References</h2>
+<ul>
+<li><a href="https://www.rfc-editor.org/rfc/rfc7489#section-6.3">RFC 7489 section 6.3 - General Record Format</a></li>
+<li><a href="https://www.rfc-editor.org/rfc/rfc7489#section-6.6.3">RFC 7489 section 6.6.3 - Policy Discovery</a></li>
+<li><a href="https://cwe.mitre.org/data/definitions/755.html">CWE-755: Improper Handling of Exceptional Conditions</a></li>
+<li><a href="https://github.com/trusteddomainproject/OpenDMARC">OpenDMARC repository</a></li>
+<li><a href="https://weitongli.com/">Weitong Li, Virginia Tech - researcher homepage</a></li>
+</ul>
+
+<footer>
+<p>Reported by <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech
+(<a href="mailto:weitongli@vt.edu">weitongli@vt.edu</a>).
+Reproduction environment and full evidence available to the vendor on request.
+CVSS is the researcher's own assessment.</p>
+</footer>
+
+</body>
+</html>

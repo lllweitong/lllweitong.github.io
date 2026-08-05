@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>OpenDKIM ignores the DKIM key record&#x27;s k= key type and takes the algorithm from the signature&#x27;s a= tag, verifying an ed25519 signature against a record declared rsa (OpenDKIM ≤ 2.11.0)</title>
+<style>
+:root { color-scheme: light dark; --fg:#111; --bg:#fff; --muted:#555; --rule:#ddd; --pre:#f5f5f5; --link:#14508c; }
+@media (prefers-color-scheme: dark) {
+  :root { --fg:#e4e4e4; --bg:#161616; --muted:#a0a0a0; --rule:#333; --pre:#1e1e1e; --link:#7fb2e5; }
+}
+body { max-width: 46rem; margin: 2.5rem auto; padding: 0 1.1rem 4rem; background: var(--bg); color: var(--fg);
+       font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+h1 { font-size: 1.35rem; line-height: 1.35; margin: 0 0 1rem; }
+h2 { font-size: 1.05rem; margin: 2rem 0 .6rem; }
+p, li { margin: .6rem 0; }
+a { color: var(--link); }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .87em; }
+pre { background: var(--pre); border: 1px solid var(--rule); padding: .75rem .85rem; overflow-x: auto;
+      font-size: .82rem; line-height: 1.45; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+table { border-collapse: collapse; width: 100%; font-size: .87rem; margin: .7rem 0; }
+th, td { border: 1px solid var(--rule); padding: .35rem .5rem; text-align: left; vertical-align: top; }
+.scroll { overflow-x: auto; }
+.hdr { font-size: .93rem; color: var(--muted); margin: 0 0 1.6rem; }
+.hdr b { color: var(--fg); font-weight: 600; }
+.lead { border-left: 3px solid var(--rule); padding-left: .85rem; margin: 0 0 1.6rem; }
+footer { margin-top: 3rem; padding-top: .8rem; border-top: 1px solid var(--rule);
+         color: var(--muted); font-size: .84rem; }
+</style>
+</head>
+<body>
+
+<h1>OpenDKIM ignores the DKIM key record's k= key type and takes the algorithm from the signature's a= tag, verifying an ed25519 signature against a record declared rsa (OpenDKIM ≤ 2.11.0)</h1>
+
+<p class="hdr">
+<b>Author:</b> <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech &lt;weitongli@vt.edu&gt;<br>
+<b>Date:</b> 2026-07-31<br>
+<b>Vendor:</b> <a href="http://www.trusteddomain.org/">The Trusted Domain Project</a><br>
+<b>Software:</b> <a href="http://www.opendkim.org/">OpenDKIM</a><br>
+<b>Affected version:</b> OpenDKIM 2.11.0 (Debian package <code>2.11.0~beta2-9.1+b1</code>). Rspamd 4.1.2 and dkimpy 1.1.8 both reject the same records correctly.<br>
+<b>Vulnerable component:</b> DKIM public-key record handling — the <code>k=</code> key-type tag of RFC 6376 section 3.6.1 and its binding to the signature algorithm<br>
+<b>Vulnerability type:</b> CWE-347 (Improper Verification of Cryptographic Signature) / CWE-757 (Selection of Less-Secure Algorithm During Negotiation)<br>
+<b>Attack vector:</b> Remote. The signature algorithm is chosen by whoever signs; the key record is published by the key owner. No interaction with a third party is required.<br>
+<b>CVSS v3.1:</b> 3.7 (Low) &mdash; <code>CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:L/A:N</code><br>
+<b>Status:</b> Reproduced on 2026-07-28 against the current release (run <code>20260728-120957</code>) with a scripted reproducer, negative controls, and a second independent implementation as the differential oracle. Confirmed three ways, with Rspamd and dkimpy as independent oracles, three stable repetitions, and a negative control in which the key bytes themselves are wrong.
+</p>
+
+<p class="lead"><b>Impact.</b> A key record with no k= tag, which defaults to rsa, still verifies an ed25519-sha256 signature on OpenDKIM, where Rspamd and dkimpy both permfail.</p>
+
+<h2>Description</h2>
+<p>This is a conformance and robustness fail-open, <strong>not</strong> a victim-spoofing bypass, and it should not be reported as one. The party that publishes the <code>k=</code> and <code>p=</code> record is the same party that produces the signature, namely the owner of the signing domain, so ignoring <code>k=</code> does not enable an attacker to forge a signature for a domain they do not control. Any <code>dmarc=pass</code> that follows is for the signer's own aligned domain, which that signer could equally have obtained by publishing a correct <code>k=ed25519</code> record.</p>
+<p>Two concrete effects remain. The first is silent interoperability divergence: a domain whose record still says <code>k=rsa</code> after an ed25519 migration, or whose <code>k=</code> and <code>p=</code> otherwise disagree, is DKIM-authenticated on OpenDKIM receivers and unauthenticated on Rspamd, dkimpy, Gmail and any other conforming verifier, with no signal to the operator that the two populations disagree about their mail. The second is the loss of a defence-in-depth control: the key record's ability to restrict a key to one algorithm is unenforced, which matters exactly during an algorithm-agility transition, when a stale declaration is most likely to be present.</p>
+<p>RFC 6376 section 3.6.1 defines <code>k=</code> as the key type, with a default of <code>rsa</code>, and states that the semantics of the <code>p=</code> public-key data are defined by it. RFC 8463 section 3 binds <code>ed25519-sha256</code> signatures to key records declaring <code>k=ed25519</code>. A verifier must therefore check the algorithm implied by the signature's <code>a=</code> tag against the type the record declares, and reject the pair when they disagree, as RFC 6376 section 6.1.2 requires of key data unsuitable for the algorithm.</p>
+<p>OpenDKIM does not consult <code>k=</code> at all. It selects the algorithm purely from the signature's <code>a=</code> tag and interprets the <code>p=</code> bytes as that algorithm's key. A record that declares <code>k=rsa</code>, or that declares nothing and therefore defaults to <code>rsa</code>, verifies an ed25519 signature and returns <code>dkim=pass</code>.</p>
+<p>The message and the <code>p=</code> key data are identical in every row: the same correct ed25519 public key. Only the record's <code>k=</code> declaration and the signature's <code>a=</code> tag vary:</p>
+<div class="scroll">
+<table>
+<tr><th>Key record</th><th>Signature <code>a=</code></th><th>OpenDKIM</th><th>Rspamd</th><th>dkimpy</th><th>Required</th></tr>
+<tr><td><code>k=ed25519</code> (control)</td><td><code>ed25519-sha256</code></td><td>pass</td><td>pass</td><td>pass</td><td>pass</td></tr>
+<tr><td><code>k=rsa</code></td><td><code>ed25519-sha256</code></td><td><strong>dkim=pass</strong> (<code>header.a=ed25519-sha256</code>)</td><td><code>R_DKIM_PERMFAIL</code></td><td>fail</td><td>fail</td></tr>
+<tr><td><em>no <code>k=</code></em> (RFC default <code>rsa</code>)</td><td><code>ed25519-sha256</code></td><td><strong>dkim=pass</strong></td><td><code>R_DKIM_PERMFAIL</code></td><td>fail</td><td>fail</td></tr>
+<tr><td><code>k=ed25519</code> with RSA key data in <code>p=</code></td><td><code>rsa-sha256</code></td><td><strong>pass</strong></td><td>fail</td><td>fail</td><td>fail</td></tr>
+</table>
+</div>
+<p>The third row is the cleanest statement of the defect. The record never names ed25519 anywhere, and under section 3.6.1 it therefore declares an RSA key, yet OpenDKIM verifies an ed25519 signature against it and reports the message as DKIM-authenticated. The fourth row shows the defect is symmetric: a record declaring <code>k=ed25519</code> whose <code>p=</code> holds RSA key data verifies an RSA signature just as happily.</p>
+<p>A negative control establishes that the cryptography is still genuinely performed. A <code>k=rsa</code> record carrying a <em>different</em> ed25519 public key in <code>p=</code> fails on OpenDKIM as well. Only the <code>k=</code> declaration is ignored; the signature is still checked against the key bytes that are published. OpenDKIM is the lone outlier here, with both Rspamd and the dkimpy reference implementation rejecting the mismatched records as section 6.1.2 requires.</p>
+
+<h2>Proof of Concept</h2>
+<p>Publish a key record that carries an ed25519 public key but declares no key type, so that the RFC default of <code>rsa</code> applies:</p>
+<pre><code>sel._domainkey.signer.example.  IN TXT "v=DKIM1; p=&lt;base64 ed25519 public key&gt;"</code></pre>
+<p>Sign the message with the matching ed25519 private key:</p>
+<pre><code>DKIM-Signature: v=1; a=ed25519-sha256; c=relaxed/relaxed; d=signer.example; s=sel;
+    h=from:to:subject:date; bh=&lt;body hash&gt;; b=&lt;signature&gt;</code></pre>
+<p>Required under RFC 6376 section 3.6.1 with RFC 8463 section 3: the record declares an RSA key by default, the key data is unsuitable for <code>ed25519-sha256</code>, and the verifier must fail. Observed on OpenDKIM: <code>dkim=pass</code> with <code>header.a=ed25519-sha256</code>. Observed on Rspamd: <code>R_DKIM_PERMFAIL</code>. Observed on dkimpy: verification fails.</p>
+<p>The explicit form <code>"v=DKIM1; k=rsa; p=&lt;base64 ed25519 public key&gt;"</code> behaves identically. Substituting a different ed25519 key in <code>p=</code> makes OpenDKIM fail, which is the control proving that the signature check itself still runs.</p>
+
+<h2>Mitigation</h2>
+<p>Determine the key type from the record's <code>k=</code> tag, applying the RFC 6376 section 3.6.1 default of <code>rsa</code> when the tag is absent, and reject the signature when the algorithm implied by <code>a=</code> does not match that type, per section 6.1.2 and RFC 8463 section 3. The algorithm must be derived from the key record and merely confirmed by the signature, not the other way round.</p>
+
+<h2>Notes</h2>
+<p>The framing here is deliberately narrower than the initial triage. An early note described this as a full DKIM and DMARC bypass; that framing is withdrawn, because the observed <code>dmarc=pass</code> is for the signer's own aligned domain, and no victim-spoofing scenario follows from ignoring <code>k=</code>.</p>
+<p>An earlier laboratory lead recorded a <code>k=ed25519</code>-versus-RSA mismatch as RFC-ambiguous and did not promote it. The no-<code>k=</code> case in the table above removes the ambiguity, because the default of <code>rsa</code> is stated in section 3.6.1 and requires no interpretation.</p>
+<p>A harness caveat that matters for anyone reproducing this: OpenDKIM's Authentication-Results value must be parsed after unfolding, because the <code>dkim=</code> token can sit on a folded continuation line, and Rspamd's <code>R_DKIM_PERMFAIL</code> symbol must be read directly rather than through a client wrapper that collapses it. Both were corrected in the reproducer before the result was recorded.</p>
+<p>Confirmation against OpenDKIM HEAD, and identification of the point at which <code>a=</code> is used without consulting the record's <code>k=</code>, remain open steps.</p>
+
+<h2>References</h2>
+<ul>
+<li><a href="https://www.rfc-editor.org/rfc/rfc6376#section-3.6.1">RFC 6376 section 3.6.1 - Textual Representation (the k= key-type tag)</a></li>
+<li><a href="https://www.rfc-editor.org/rfc/rfc6376#section-6.1.2">RFC 6376 section 6.1.2 - Get the Public Key</a></li>
+<li><a href="https://www.rfc-editor.org/rfc/rfc8463#section-3">RFC 8463 section 3 - Signing and Verifying with Ed25519-SHA256</a></li>
+<li><a href="https://cwe.mitre.org/data/definitions/347.html">CWE-347: Improper Verification of Cryptographic Signature</a></li>
+<li><a href="https://cwe.mitre.org/data/definitions/757.html">CWE-757: Selection of Less-Secure Algorithm During Negotiation</a></li>
+<li><a href="https://github.com/trusteddomainproject/OpenDKIM">OpenDKIM repository</a></li>
+<li><a href="https://weitongli.com/">Weitong Li, Virginia Tech - researcher homepage</a></li>
+</ul>
+
+<footer>
+<p>Reported by <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech
+(<a href="mailto:weitongli@vt.edu">weitongli@vt.edu</a>).
+Reproduction environment and full evidence available to the vendor on request.
+CVSS is the researcher's own assessment.</p>
+</footer>
+
+</body>
+</html>

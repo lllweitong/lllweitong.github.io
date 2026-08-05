@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Apache SpamAssassin quadratic-time denial of service on deeply nested HTML (Apache SpamAssassin 3.4.6)</title>
+<style>
+:root { color-scheme: light dark; --fg:#111; --bg:#fff; --muted:#555; --rule:#ddd; --pre:#f5f5f5; --link:#14508c; }
+@media (prefers-color-scheme: dark) {
+  :root { --fg:#e4e4e4; --bg:#161616; --muted:#a0a0a0; --rule:#333; --pre:#1e1e1e; --link:#7fb2e5; }
+}
+body { max-width: 46rem; margin: 2.5rem auto; padding: 0 1.1rem 4rem; background: var(--bg); color: var(--fg);
+       font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+h1 { font-size: 1.35rem; line-height: 1.35; margin: 0 0 1rem; }
+h2 { font-size: 1.05rem; margin: 2rem 0 .6rem; }
+p, li { margin: .6rem 0; }
+a { color: var(--link); }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .87em; }
+pre { background: var(--pre); border: 1px solid var(--rule); padding: .75rem .85rem; overflow-x: auto;
+      font-size: .82rem; line-height: 1.45; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+table { border-collapse: collapse; width: 100%; font-size: .87rem; margin: .7rem 0; }
+th, td { border: 1px solid var(--rule); padding: .35rem .5rem; text-align: left; vertical-align: top; }
+.scroll { overflow-x: auto; }
+.hdr { font-size: .93rem; color: var(--muted); margin: 0 0 1.6rem; }
+.hdr b { color: var(--fg); font-weight: 600; }
+.lead { border-left: 3px solid var(--rule); padding-left: .85rem; margin: 0 0 1.6rem; }
+footer { margin-top: 3rem; padding-top: .8rem; border-top: 1px solid var(--rule);
+         color: var(--muted); font-size: .84rem; }
+</style>
+</head>
+<body>
+
+<h1>Apache SpamAssassin quadratic-time denial of service on deeply nested HTML (Apache SpamAssassin 3.4.6)</h1>
+
+<p class="hdr">
+<b>Author:</b> <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech &lt;weitongli@vt.edu&gt;<br>
+<b>Date:</b> 2026-07-31<br>
+<b>Vendor:</b> <a href="https://www.apache.org/">The Apache Software Foundation (Apache SpamAssassin)</a><br>
+<b>Software:</b> <a href="https://spamassassin.apache.org/">Apache SpamAssassin</a><br>
+<b>Affected version:</b> 3.4.6 (the version tested). Other releases sharing the same HTML processing are likely affected; not yet verified against 4.x.<br>
+<b>Vulnerable component:</b> HTML body processing — <code>Mail::SpamAssassin::HTML</code> and its <code>HTML::Parser</code> usage; the exact quadratic loop is not yet pinpointed.<br>
+<b>Vulnerability type:</b> CWE-407 (Inefficient Algorithmic Complexity)<br>
+<b>Attack vector:</b> Remote, unauthenticated. One inbound e-mail; SpamAssassin scans the HTML body of every message.<br>
+<b>CVSS v3.1:</b> 7.5 (High) &mdash; <code>CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H</code><br>
+<b>Status:</b> Confirmed by timing measurement across four nesting depths, with a flat-body control that isolates depth from size.
+</p>
+
+<p class="lead"><b>Impact.</b> A 220 KB message body of nested &lt;div&gt; elements occupies the scanner for over a minute; doubling the nesting depth quadruples the time.</p>
+
+<h2>Description</h2>
+<p>An availability issue in mail processing rather than a crash. Under the default per-message timeout, a stream of such messages backs the queue up and stalls delivery; without an effective timeout the scanner occupies a core per message for minutes. The cost to the attacker is one 220 KB message, so the amplification is substantial and the attack requires no authentication and no prior relationship with the target.</p>
+<p>SpamAssassin's HTML processing scales quadratically in the nesting depth of the message body. A body consisting of deeply nested <code>&lt;div&gt;</code> elements occupies the scanner for minutes, while a flat body many times larger scans in seconds. Because the body is fully attacker-controlled and every inbound message is scanned, one moderately sized message can stall mail processing.</p>
+<p>Timing across nesting depths, with the message size shown for each:</p>
+<div class="scroll">
+<table>
+<tr><th>Nested <code>&lt;div&gt;</code> depth</th><th>Scan time</th><th>Message size</th></tr>
+<tr><td>2,000</td><td>3.2 s</td><td>~22 KB</td></tr>
+<tr><td>5,000</td><td>7.9 s</td><td>~55 KB</td></tr>
+<tr><td>10,000</td><td>31.8 s</td><td>~110 KB</td></tr>
+<tr><td>20,000</td><td>&gt; 60 s (timeout)</td><td>~220 KB</td></tr>
+</table>
+</div>
+<p>Doubling the depth from 5,000 to 10,000 quadruples the time, from 7.9 s to 31.8 s, which is the signature of an O(n²) algorithm.</p>
+<p>The control isolates depth from byte count: a <em>flat</em> 2 MB body — roughly ten times the size of the 220 KB nested case — scans in about 4 seconds. The cost is therefore the tree depth, not the volume of input, which rules out ordinary large-input slowness.</p>
+
+<h2>Proof of Concept</h2>
+<pre><code>printf 'From: a@b.com\nContent-Type: text/html\n\n' &gt; poc
+python3 -c "import sys; sys.stdout.buffer.write(b'&lt;div&gt;'*20000 + b'x' + b'&lt;/div&gt;'*20000)" &gt;&gt; poc
+
+time spamassassin --local -t &lt; poc     # &gt; 60 s on a ~220 KB message</code></pre>
+<p>Reduce the repetition count to 10,000 for a reproduction that completes, at roughly 32 seconds.</p>
+
+<h2>Mitigation</h2>
+<p>Bound the work rather than the input alone:</p>
+<ul>
+<li>Impose a maximum HTML nesting depth during parsing and stop descending beyond it.</li>
+<li>Apply a body and HTML size limit in <code>Mail::SpamAssassin</code> configuration.</li>
+<li>Enforce a per-message CPU cap so that a pathological body cannot consume unbounded time.</li>
+</ul>
+<p>Root-causing the specific quadratic loop — whether it is in the tree construction or in a rule that walks the tree per node — is the next step and would allow a targeted fix rather than a limit.</p>
+
+<h2>Notes</h2>
+<p><strong>Check for a duplicate before submission.</strong> SpamAssassin has prior denial-of-service CVEs, including CVE-2017-15705 and CVE-2018-11780. Whether this specific nested-HTML quadratic is already covered by an existing assignment has not been established, and should be checked with the Apache SpamAssassin security team before a new identifier is requested.</p>
+<p>Tested against 3.4.6 only. Confirmation against the current 4.x line is outstanding.</p>
+
+<h2>References</h2>
+<ul>
+<li><a href="https://spamassassin.apache.org/">Apache SpamAssassin</a></li>
+<li><a href="https://spamassassin.apache.org/news.html">Apache SpamAssassin security advisories</a></li>
+<li><a href="https://cwe.mitre.org/data/definitions/407.html">CWE-407: Inefficient Algorithmic Complexity</a></li>
+<li><a href="https://weitongli.com/">Weitong Li, Virginia Tech - researcher homepage</a></li>
+</ul>
+
+<footer>
+<p>Reported by <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech
+(<a href="mailto:weitongli@vt.edu">weitongli@vt.edu</a>).
+Reproduction environment and full evidence available to the vendor on request.
+CVSS is the researcher's own assessment.</p>
+</footer>
+
+</body>
+</html>

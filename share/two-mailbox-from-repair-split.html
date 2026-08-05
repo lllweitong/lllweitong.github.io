@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>OpenDMARC and Rspamd repair a two-mailbox From header to opposite mailboxes, allowing a verifier-aware DMARC bypass (OpenDMARC &lt;= 1.4.2 and Rspamd ≤ 4.1.2)</title>
+<style>
+:root { color-scheme: light dark; --fg:#111; --bg:#fff; --muted:#555; --rule:#ddd; --pre:#f5f5f5; --link:#14508c; }
+@media (prefers-color-scheme: dark) {
+  :root { --fg:#e4e4e4; --bg:#161616; --muted:#a0a0a0; --rule:#333; --pre:#1e1e1e; --link:#7fb2e5; }
+}
+body { max-width: 46rem; margin: 2.5rem auto; padding: 0 1.1rem 4rem; background: var(--bg); color: var(--fg);
+       font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+h1 { font-size: 1.35rem; line-height: 1.35; margin: 0 0 1rem; }
+h2 { font-size: 1.05rem; margin: 2rem 0 .6rem; }
+p, li { margin: .6rem 0; }
+a { color: var(--link); }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .87em; }
+pre { background: var(--pre); border: 1px solid var(--rule); padding: .75rem .85rem; overflow-x: auto;
+      font-size: .82rem; line-height: 1.45; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+table { border-collapse: collapse; width: 100%; font-size: .87rem; margin: .7rem 0; }
+th, td { border: 1px solid var(--rule); padding: .35rem .5rem; text-align: left; vertical-align: top; }
+.scroll { overflow-x: auto; }
+.hdr { font-size: .93rem; color: var(--muted); margin: 0 0 1.6rem; }
+.hdr b { color: var(--fg); font-weight: 600; }
+.lead { border-left: 3px solid var(--rule); padding-left: .85rem; margin: 0 0 1.6rem; }
+footer { margin-top: 3rem; padding-top: .8rem; border-top: 1px solid var(--rule);
+         color: var(--muted); font-size: .84rem; }
+</style>
+</head>
+<body>
+
+<h1>OpenDMARC and Rspamd repair a two-mailbox From header to opposite mailboxes, allowing a verifier-aware DMARC bypass (OpenDMARC &lt;= 1.4.2 and Rspamd ≤ 4.1.2)</h1>
+
+<p class="hdr">
+<b>Author:</b> <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech &lt;weitongli@vt.edu&gt;<br>
+<b>Date:</b> 2026-07-31<br>
+<b>Vendor:</b> <a href="http://www.trusteddomain.org/">The Trusted Domain Project and the Rspamd project (Vsevolod Stakhov)</a><br>
+<b>Software:</b> <a href="https://github.com/trusteddomainproject/OpenDMARC">OpenDMARC and Rspamd (both affected, in opposite directions)</a><br>
+<b>Affected version:</b> OpenDMARC 1.4.2 (takes the last mailbox) and Rspamd 4.1.2, originally isolated on 3.10.2 (takes the first).<br>
+<b>Vulnerable component:</b> DMARC Author Domain extraction from a malformed RFC 5322 From header<br>
+<b>Vulnerability type:</b> CWE-436 (Interpretation Conflict) leading to CWE-290 (Authentication Bypass by Spoofing)<br>
+<b>Attack vector:</b> Remote. The attacker needs a domain of their own with a valid DKIM key, which is freely obtainable.<br>
+<b>CVSS v3.1:</b> 7.5 (High) &mdash; <code>CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:N</code><br>
+<b>Status:</b> Reproduced on 2026-07-28 against the current release (run <code>20260728-120957</code>) with a scripted reproducer, negative controls, and a second independent implementation as the differential oracle. Four of four deterministic, with separator, direction and single-domain controls.
+</p>
+
+<p class="lead"><b>Impact.</b> From: ceo@victim.com ceo@attacker.com is silently repaired to the last mailbox by OpenDMARC and the first by Rspamd, so ordering picks which verifier is defeated.</p>
+
+<h2>Description</h2>
+<p>An attacker who can pass DKIM for their own throwaway domain constructs a From header containing both the victim and the attacker mailbox, ordered so that the target's verifier selects the attacker's aligned domain. The message obtains <code>dmarc=pass</code> while its From header still contains <code>victim.com</code>.</p>
+<p>The attack is verifier-aware and covers the field: attacker-last defeats OpenDMARC, attacker-first defeats Rspamd. Since both implementations are wrong in opposite directions, one ordering or the other works against any given receiver.</p>
+<p>How a mail client renders such a header determines the phishing value and was not measured here. The laboratory-confirmed part is the deterministic cross-verifier disagreement on Author Domain selection, on a message whose From visibly contains the victim's domain.</p>
+<p>A From header containing two address specifications separated by a single space — <code>From: ceo@victim.com ceo@attacker.com</code> — is malformed. RFC 5322 section 3.6.2 requires comma separation and an accompanying <code>Sender:</code> for multiple mailboxes, and RFC 7489 section 6.6.1 says a message without exactly one parseable From mailbox should be treated as a DMARC failure.</p>
+<p>Both verifiers instead silently repair the header to a single mailbox, and they pick opposite ones. OpenDMARC takes the last address specification; Rspamd takes the first. The attacker chooses the ordering to place their own aligned domain wherever the target's verifier looks.</p>
+<p>The attacker controls <code>attacker.com</code>, holds a valid DKIM key for it, and signs <code>d=attacker.com</code>. The policy under test is <code>p=reject; adkim=s</code>:</p>
+<div class="scroll">
+<table>
+<tr><th><code>From:</code></th><th>OpenDMARC</th><th>Rspamd</th><th>Who picked what</th></tr>
+<tr><td><code>ceo@attacker.com</code> (control)</td><td>dmarc=pass</td><td>pass</td><td>both take the attacker, aligned</td></tr>
+<tr><td><code>ceo@victim.com</code> (control)</td><td>dmarc=fail</td><td>fail</td><td>both take the victim, unaligned</td></tr>
+<tr><td><code>ceo@victim.com ceo@attacker.com</code></td><td><strong>dmarc=pass</strong> (header.from=attacker)</td><td>dmarc=fail (victim)</td><td>OpenDMARC last, Rspamd first</td></tr>
+<tr><td><code>ceo@attacker.com ceo@victim.com</code></td><td>dmarc=fail (victim)</td><td><strong>dmarc=pass</strong> (attacker)</td><td>OpenDMARC last, Rspamd first</td></tr>
+<tr><td><code>ceo@victim.com, ceo@attacker.com</code> (comma)</td><td>no verdict</td><td>none / DMARC_NA</td><td>both reject — consensus</td></tr>
+</table>
+</div>
+<p>The controls isolate the mechanism completely. The comma form — the only RFC-valid mailbox list — makes both verifiers refuse, so the space separator is the trigger. A bare CR and a folded CRLF plus space behave like the space. A concatenated single token makes both pick the same domain. Reversing the order flips both verdicts, which demonstrates the selection rule rather than a domain-specific effect.</p>
+<p>Critically, the DKIM signature is reported <code>pass header.d=attacker.com</code> by <em>both</em> verifiers on the identical message. The verdict split therefore arises purely from Author Domain selection, not from any difference in signature verification.</p>
+<p>A NUL separator produces the same opposite-mailbox split by a different route: OpenDMARC truncates at the NUL and Rspamd reads past it.</p>
+
+<h2>Proof of Concept</h2>
+<pre><code># attacker's own domain, with a valid key and a reject policy
+_dmarc.attacker.com.               IN TXT "v=DMARC1; p=reject; adkim=s"
+sel._domainkey.attacker.com.       IN TXT "v=DKIM1; k=rsa; p=..."
+
+# victim
+_dmarc.victim.com.                 IN TXT "v=DMARC1; p=reject; adkim=s"</code></pre>
+<p>Send a message signed <code>d=attacker.com</code> with the attacker's own valid key and the header:</p>
+<pre><code>From: ceo@victim.com ceo@attacker.com</code></pre>
+<p>Required under RFC 7489 section 6.6.1: DMARC failure, because the header has no single parseable mailbox. Observed on OpenDMARC: <code>dmarc=pass</code> with <code>header.from=attacker.com</code>. Reverse the two mailboxes to obtain the same result on Rspamd.</p>
+
+<h2>Mitigation</h2>
+<p>Both implementations should follow RFC 7489 section 6.6.1 and treat a From header without exactly one parseable mailbox as a DMARC failure, rather than repairing it. Repairing a malformed header to <em>any</em> single mailbox is unsafe when implementations disagree about which one; the disagreement is the vulnerability.</p>
+
+<h2>Notes</h2>
+<p>Both projects are affected and both should receive the report. Neither implementation is “correct” here: the required behaviour is refusal, and first-wins and last-wins are both deviations.</p>
+<p>Re-verified with distinct <code>.com</code> organisations and <code>adkim=s</code>, so organisational-domain and Public Suffix List computation cannot confound the result.</p>
+
+<h2>References</h2>
+<ul>
+<li><a href="https://www.rfc-editor.org/rfc/rfc5322#section-3.6.2">RFC 5322 section 3.6.2 - Originator Fields</a></li>
+<li><a href="https://www.rfc-editor.org/rfc/rfc7489#section-6.6.1">RFC 7489 section 6.6.1 - Extract Author Domain</a></li>
+<li><a href="https://cwe.mitre.org/data/definitions/436.html">CWE-436: Interpretation Conflict</a></li>
+<li><a href="https://github.com/trusteddomainproject/OpenDMARC">OpenDMARC repository</a></li>
+<li><a href="https://rspamd.com/">Rspamd</a></li>
+<li><a href="https://weitongli.com/">Weitong Li, Virginia Tech - researcher homepage</a></li>
+</ul>
+
+<footer>
+<p>Reported by <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech
+(<a href="mailto:weitongli@vt.edu">weitongli@vt.edu</a>).
+Reproduction environment and full evidence available to the vendor on request.
+CVSS is the researcher's own assessment.</p>
+</footer>
+
+</body>
+</html>

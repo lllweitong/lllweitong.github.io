@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>OpenDMARC implements RFC 7489 Public Suffix List discovery and therefore never sees an RFC 9989 tree-walk policy at an intermediate label (OpenDMARC ≤ 1.4.2)</title>
+<style>
+:root { color-scheme: light dark; --fg:#111; --bg:#fff; --muted:#555; --rule:#ddd; --pre:#f5f5f5; --link:#14508c; }
+@media (prefers-color-scheme: dark) {
+  :root { --fg:#e4e4e4; --bg:#161616; --muted:#a0a0a0; --rule:#333; --pre:#1e1e1e; --link:#7fb2e5; }
+}
+body { max-width: 46rem; margin: 2.5rem auto; padding: 0 1.1rem 4rem; background: var(--bg); color: var(--fg);
+       font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+h1 { font-size: 1.35rem; line-height: 1.35; margin: 0 0 1rem; }
+h2 { font-size: 1.05rem; margin: 2rem 0 .6rem; }
+p, li { margin: .6rem 0; }
+a { color: var(--link); }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .87em; }
+pre { background: var(--pre); border: 1px solid var(--rule); padding: .75rem .85rem; overflow-x: auto;
+      font-size: .82rem; line-height: 1.45; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+table { border-collapse: collapse; width: 100%; font-size: .87rem; margin: .7rem 0; }
+th, td { border: 1px solid var(--rule); padding: .35rem .5rem; text-align: left; vertical-align: top; }
+.scroll { overflow-x: auto; }
+.hdr { font-size: .93rem; color: var(--muted); margin: 0 0 1.6rem; }
+.hdr b { color: var(--fg); font-weight: 600; }
+.lead { border-left: 3px solid var(--rule); padding-left: .85rem; margin: 0 0 1.6rem; }
+footer { margin-top: 3rem; padding-top: .8rem; border-top: 1px solid var(--rule);
+         color: var(--muted); font-size: .84rem; }
+</style>
+</head>
+<body>
+
+<h1>OpenDMARC implements RFC 7489 Public Suffix List discovery and therefore never sees an RFC 9989 tree-walk policy at an intermediate label (OpenDMARC ≤ 1.4.2)</h1>
+
+<p class="hdr">
+<b>Author:</b> <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech &lt;weitongli@vt.edu&gt;<br>
+<b>Date:</b> 2026-07-31<br>
+<b>Vendor:</b> <a href="http://www.trusteddomain.org/">The Trusted Domain Project</a><br>
+<b>Software:</b> <a href="https://github.com/trusteddomainproject/OpenDMARC">OpenDMARC</a><br>
+<b>Affected version:</b> OpenDMARC 1.4.2, built from the upstream tarball <code>rel-opendmarc-1-4-2</code>. The finding was originally isolated on the Debian package <code>1.4.2-1+deb12u1</code> and re-confirmed against pristine upstream. Earlier 1.4.x and 1.3.x releases are expected to share the behaviour.<br>
+<b>Vulnerable component:</b> DMARC policy discovery — the RFC 7489 section 6.6.3 organisational-domain lookup, in place of the RFC 9989 section 4.8 label-by-label tree walk<br>
+<b>Vulnerability type:</b> None (an RFC 7489 versus RFC 9989 divergence, not a defect)<br>
+<b>Attack vector:</b> Not an attack. The exposure is a deployment consequence: it arises when a domain owner publishes DMARC only at an intermediate label, in anticipation of RFC 9989 adoption.<br>
+<b>CVSS v3.1:</b> Not applicable<br>
+<b>Status:</b> Reproduced 34 of 34 cases in run <code>20260527T165112-db7f9513</code>, against an RFC 9989 specification modeller as the reference oracle.
+</p>
+
+<p class="lead"><b>Impact.</b> Published for completeness and not submitted as a vendor vulnerability: OpenDMARC is faithful to RFC 7489 section 6.6.3, so this is a conformance and migration hazard during the 7489-to-9989 transition rather than an implementation flaw.</p>
+
+<h2>Description</h2>
+<p>The hazard is asymmetric and depends on operator deployment choices. A domain owner who anticipates RFC 9989 adoption, publishes DMARC at an intermediate tree level, and removes the record at the top-level organisational domain will find that tree-walk verifiers reject spoofs correctly while OpenDMARC-based verifiers deliver the same spoofs under “no policy”.</p>
+<p>The second-order effect is measurement error. An operator auditing DMARC coverage against a single verifier will draw incorrect conclusions about how their policy is being applied elsewhere, in whichever direction their chosen verifier errs.</p>
+<p>This is interoperability decay during a specification migration rather than a verifier-side exploit. It nonetheless deserves recording, because the transition is under way and OpenDMARC remains broadly deployed.</p>
+<p><strong>This entry is published for completeness and is deliberately not submitted as a vendor vulnerability.</strong> OpenDMARC 1.4.2 implements RFC 7489 section 6.6.3 faithfully and correctly. The behaviour recorded here is visible only when it is measured against RFC 9989 section 4.8, which replaced the Public Suffix List organisational-domain lookup with a DNS tree walk. It is a conformance and migration hazard for the period in which both discovery models are deployed, not an implementation flaw, and the appropriate request to the project is migration tooling rather than a fix.</p>
+<p>RFC 9989 section 4.8 has a verifier walk up the DNS tree from the Author Domain one label at a time, looking for a <code>_dmarc</code> record at each level, until a record is found, a label declared <code>psd=y</code> is reached, or a maximum number of lookups has been performed. RFC 7489 section 6.6.3 instead queries <code>_dmarc.&lt;author&gt;</code> and, on NXDOMAIN, jumps directly to the Public Suffix List derived organisational domain and queries exactly once more.</p>
+<p>A DMARC record published at an intermediate label is therefore authoritative to a tree-walk verifier and invisible to OpenDMARC.</p>
+<p>OpenDMARC visits two nodes and only two: the Author Domain, and the organisational domain derived from the Public Suffix List. For the Author Domain <code>a.b.c.example.com</code> the two discovery models visit different sets of nodes:</p>
+<div class="scroll">
+<table>
+<tr><th>Node queried</th><th>RFC 9989 section 4.8 tree walk</th><th>OpenDMARC (RFC 7489 section 6.6.3)</th></tr>
+<tr><td><code>_dmarc.a.b.c.example.com</code> (the Author Domain)</td><td>queried</td><td>queried</td></tr>
+<tr><td><code>_dmarc.b.c.example.com</code></td><td>queried</td><td><strong>not queried</strong></td></tr>
+<tr><td><code>_dmarc.c.example.com</code></td><td>queried</td><td><strong>not queried</strong></td></tr>
+<tr><td><code>_dmarc.example.com</code> (the organisational domain)</td><td>queried</td><td>queried</td></tr>
+</table>
+</div>
+<p>The depth-3 reproducer publishes the policy at an intermediate label and nothing at the organisational domain:</p>
+<pre><code>sender-x.example.com.                  IN SOA ns.lab.test. h.lab.test. 1 60 60 60 60
+sender-x.example.com.                  IN MX  10 mx.sender-x.example.com.
+sender-x.example.com.                  IN TXT "v=spf1 +all"
+_dmarc.sender-x.example.com.           IN TXT "v=DMARC1; p=quarantine"
+sub.sender-x.example.com.              IN SOA ns.lab.test. h.lab.test. 1 60 60 60 60
+deep.sub.sender-x.example.com.         IN SOA ns.lab.test. h.lab.test. 1 60 60 60 60
+default._domainkey.deep.sub.sender-x.example.com. IN TXT "v=DKIM1; k=rsa; p=..."</code></pre>
+<p>A DKIM-signed message with <code>From: alice@deep.sub.sender-x.example.com</code> then produces:</p>
+<div class="scroll">
+<table>
+<tr><th>Verifier</th><th>Discovery path</th><th>Verdict</th></tr>
+<tr><td>RFC 9989 specification modeller</td><td>walks up and finds the policy at <code>_dmarc.sender-x.example.com</code></td><td><code>dmarc=pass</code></td></tr>
+<tr><td>OpenDMARC 1.4.2</td><td>queries <code>_dmarc.deep.sub.sender-x.example.com</code>, then jumps to <code>_dmarc.example.com</code></td><td><strong><code>dmarc=none</code></strong></td></tr>
+</table>
+</div>
+<p>The intermediate node that carries the policy is never consulted, because it is neither the Author Domain nor the Public Suffix List organisational domain. Reproducibility in the laboratory was 34 of 34 cases across the Author Domain shapes exercised.</p>
+
+<h2>Proof of Concept</h2>
+<pre><code># zone: the policy sits at an intermediate label, and nowhere else
+_dmarc.sender-x.example.com.  IN TXT "v=DMARC1; p=quarantine"
+# no record at _dmarc.example.com and none at _dmarc.deep.sub.sender-x.example.com
+
+# message
+From: alice@deep.sub.sender-x.example.com</code></pre>
+<p>An RFC 9989 verifier walks <code>deep.sub.sender-x.example.com</code>, <code>sub.sender-x.example.com</code>, <code>sender-x.example.com</code>, finds <code>p=quarantine</code> there, and evaluates against it. OpenDMARC stamps <code>dmarc=none</code>. The same zone with the policy moved to <code>_dmarc.example.com</code> makes both agree, which confirms that the intermediate placement is the only variable.</p>
+
+<h2>Mitigation</h2>
+<p>The request to the project is migration tooling, not a defect fix. Add RFC 9989 section 4.8 tree-walk discovery, gated behind a configuration directive so that operators can select the discovery model their deployment requires, and document the migration footprint: which node set each mode consults, and what a domain owner should expect from receivers still running the RFC 7489 model.</p>
+<p>Nothing in the current behaviour needs to be corrected for OpenDMARC to remain conformant to the specification version it implements.</p>
+
+<h2>Notes</h2>
+<p><strong>Why this is not submitted as a vendor vulnerability.</strong> There is no defect to report. RFC 7489 section 6.6.3 prescribes exactly the two-node lookup that OpenDMARC performs, and OpenDMARC performs it correctly. The divergence exists because RFC 9989 replaced that lookup, and it will persist for as long as the two discovery models coexist in deployment. Assigning a vulnerability to a faithful implementation of the specification it declares would be incorrect, so the disclosure framing is a migration-tooling request through the same maintainer chain, not a CVE candidate.</p>
+<p>The exposure is also conditional on a deployment choice that few domains have yet made. A domain that publishes at its organisational domain, as almost all currently do, is unaffected in both models.</p>
+<p>Recorded as future laboratory work: a <code>mode=7489</code> variant of the case generator, so that the same Author Domain shapes can be asserted against an explicit RFC 7489 verdict, which tests OpenDMARC against the specification it implements rather than against the one that replaced it.</p>
+
+<h2>References</h2>
+<ul>
+<li><a href="https://www.rfc-editor.org/rfc/rfc7489#section-6.6.3">RFC 7489 section 6.6.3 - Policy Discovery (the Public Suffix List organisational-domain lookup)</a></li>
+<li><a href="https://www.rfc-editor.org/rfc/rfc7489#section-3.2">RFC 7489 section 3.2 - Organizational Domain</a></li>
+<li><a href="https://www.rfc-editor.org/rfc/rfc9989">RFC 9989 - Domain-based Message Authentication, Reporting, and Conformance (DMARC)</a></li>
+<li><a href="https://www.rfc-editor.org/rfc/rfc9989#section-4.8">RFC 9989 section 4.8 - DNS Tree Walk</a></li>
+<li><a href="https://publicsuffix.org/list/">Public Suffix List</a></li>
+<li><a href="https://github.com/trusteddomainproject/OpenDMARC">OpenDMARC repository</a></li>
+<li><a href="https://weitongli.com/">Weitong Li, Virginia Tech - researcher homepage</a></li>
+</ul>
+
+<footer>
+<p>Reported by <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech
+(<a href="mailto:weitongli@vt.edu">weitongli@vt.edu</a>).
+Reproduction environment and full evidence available to the vendor on request.
+CVSS is the researcher's own assessment.</p>
+</footer>
+
+</body>
+</html>

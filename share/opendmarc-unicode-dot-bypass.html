@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>OpenDMARC does not apply IDNA/UTS-46 mapping to the From domain, so a Unicode look-alike separator disables DMARC for any ASCII domain (OpenDMARC ≤ 1.4.2)</title>
+<style>
+:root { color-scheme: light dark; --fg:#111; --bg:#fff; --muted:#555; --rule:#ddd; --pre:#f5f5f5; --link:#14508c; }
+@media (prefers-color-scheme: dark) {
+  :root { --fg:#e4e4e4; --bg:#161616; --muted:#a0a0a0; --rule:#333; --pre:#1e1e1e; --link:#7fb2e5; }
+}
+body { max-width: 46rem; margin: 2.5rem auto; padding: 0 1.1rem 4rem; background: var(--bg); color: var(--fg);
+       font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+h1 { font-size: 1.35rem; line-height: 1.35; margin: 0 0 1rem; }
+h2 { font-size: 1.05rem; margin: 2rem 0 .6rem; }
+p, li { margin: .6rem 0; }
+a { color: var(--link); }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .87em; }
+pre { background: var(--pre); border: 1px solid var(--rule); padding: .75rem .85rem; overflow-x: auto;
+      font-size: .82rem; line-height: 1.45; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+table { border-collapse: collapse; width: 100%; font-size: .87rem; margin: .7rem 0; }
+th, td { border: 1px solid var(--rule); padding: .35rem .5rem; text-align: left; vertical-align: top; }
+.scroll { overflow-x: auto; }
+.hdr { font-size: .93rem; color: var(--muted); margin: 0 0 1.6rem; }
+.hdr b { color: var(--fg); font-weight: 600; }
+.lead { border-left: 3px solid var(--rule); padding-left: .85rem; margin: 0 0 1.6rem; }
+footer { margin-top: 3rem; padding-top: .8rem; border-top: 1px solid var(--rule);
+         color: var(--muted); font-size: .84rem; }
+</style>
+</head>
+<body>
+
+<h1>OpenDMARC does not apply IDNA/UTS-46 mapping to the From domain, so a Unicode look-alike separator disables DMARC for any ASCII domain (OpenDMARC ≤ 1.4.2)</h1>
+
+<p class="hdr">
+<b>Author:</b> <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech &lt;weitongli@vt.edu&gt;<br>
+<b>Date:</b> 2026-07-31<br>
+<b>Vendor:</b> <a href="http://www.trusteddomain.org/">The Trusted Domain Project</a><br>
+<b>Software:</b> <a href="https://github.com/trusteddomainproject/OpenDMARC">OpenDMARC</a><br>
+<b>Affected version:</b> OpenDMARC 1.4.2, built from the upstream tarball <code>rel-opendmarc-1-4-2</code>. The finding was originally isolated on the Debian package <code>1.4.2-1+deb12u1</code> and re-confirmed against pristine upstream. Earlier 1.4.x and 1.3.x releases are expected to share the behaviour.<br>
+<b>Vulnerable component:</b> DMARC Author Domain extraction — the missing IDNA ToASCII / UTS-46 mapping step before the <code>_dmarc</code> lookup<br>
+<b>Vulnerability type:</b> CWE-1289 (Improper Validation of Unsafe Equivalence in Input)<br>
+<b>Attack vector:</b> Remote, unauthenticated, no user interaction. One forged, unsigned message.<br>
+<b>CVSS v3.1:</b> 7.5 (High) &mdash; <code>CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:N</code><br>
+<b>Status:</b> Reproduced on 2026-07-28 against the current release (run <code>20260728-120957</code>) with a scripted reproducer, negative controls, and a second independent implementation as the differential oracle. Confirmed 6 of 6 under a real registrable <code>.com</code> domain, with an IDNA reference oracle.
+</p>
+
+<p class="lead"><b>Impact.</b> A single fullwidth full stop (U+FF0E) in the From domain turns a p=reject policy into dmarc=none, with no attacker credentials of any kind.</p>
+
+<h2>Description</h2>
+<p>Complete DMARC bypass against any plain-ASCII domain publishing <code>p=reject</code> or <code>p=quarantine</code>, on any receiver running OpenDMARC. The attacker needs no DKIM key, no control of the victim's DNS, and no relationship with the victim — only the ability to send mail, which is to say no credentials at all. The visible <code>From:</code> in the recipient's mail client renders as the victim's domain to any reader who does not inspect the individual code points.</p>
+<p>This is the most broadly exploitable of the behavioural findings, because the precondition is merely that the victim has deployed DMARC.</p>
+<p>RFC 7489 section 6.6.1 is a MUST: <em>“If the domain is encoded with UTF-8, the domain name MUST be converted to an A-label, as described in Section 2.3 of [IDNA], for further processing.”</em> IDNA ToASCII performs UTS-46 compatibility and separator mapping before punycoding.</p>
+<p>OpenDMARC omits the step entirely. A <code>From:</code> domain written with a Unicode character that NFKC/UTS-46 maps onto the victim's ASCII organisational domain is treated as an unrelated, unknown domain: no <code>_dmarc</code> record is found, and the verdict is <code>dmarc=none</code>. The victim's <code>p=reject</code> is not applied and the forgery is delivered.</p>
+<p>The victim population is not limited to owners of internationalised domains. It is <em>every plain-ASCII DMARC-protected domain</em>, because the malicious From folds down to the ASCII organisational domain.</p>
+<p>Against a plain-ASCII organisation publishing <code>p=reject</code>, with a forged, unsigned, unaligned message, only the From domain varies:</p>
+<div class="scroll">
+<table>
+<tr><th>From domain form</th><th>OpenDMARC</th><th>Rspamd</th><th>IDNA reference</th></tr>
+<tr><td><code>vic.example.com</code> (plain ASCII, control)</td><td>fail</td><td>fail</td><td>fail (consensus)</td></tr>
+<tr><td><code>vic．example．com</code> (U+FF0E fullwidth full stop)</td><td><strong>none — fail-open</strong></td><td>fail</td><td>folds to the ASCII organisation</td></tr>
+<tr><td><code>vic。example。com</code> (U+3002 ideographic full stop)</td><td><strong>none</strong></td><td>fail</td><td>folds to the ASCII organisation</td></tr>
+<tr><td><code>vic｡example｡com</code> (U+FF61 halfwidth ideographic full stop)</td><td><strong>none</strong></td><td>fail</td><td>folds to the ASCII organisation</td></tr>
+<tr><td><code>ｖｉｃ.example.com</code> (fullwidth letters, NFKC to <code>vic</code>)</td><td><strong>none</strong></td><td>fail</td><td>folds to the ASCII organisation</td></tr>
+</table>
+</div>
+<p>The Authentication-Results header OpenDMARC writes for the U+FF0E case records the raw fullwidth bytes, which shows directly that no mapping took place:</p>
+<pre><code>Authentication-Results: receiver.test; dmarc=none (p=none dis=none)
+    header.from=vic．example．com</code></pre>
+<p>Two controls make the mechanism airtight. An ASCII-dot From equal to the victim organisation makes both verifiers fail, proving both are able to perform the lookup at all. The same compatibility forms with <em>no</em> policy published make both return <code>none</code>, isolating the published <code>p=reject</code> as the only variable that diverges. The run was repeated on two fresh random domain suffixes to exclude DNS or policy caching.</p>
+
+<h2>Proof of Concept</h2>
+<p>Publish, for a victim organisation under a real registrable suffix:</p>
+<pre><code>_dmarc.vic.example.com.  IN  TXT  "v=DMARC1; p=reject; adkim=s; aspf=s"</code></pre>
+<p>Send an unsigned message from an unrelated host, with an envelope sender in an unrelated domain and no aligned DKIM signature:</p>
+<pre><code>MAIL FROM:&lt;bounce@attacker.invalid&gt;
+RCPT TO:&lt;user@receiver.test&gt;
+DATA
+From: ceo@vic．example．com          &lt;- U+FF0E instead of '.'
+To: user@receiver.test
+Subject: invoice
+
+...
+.</code></pre>
+<p>Expected under RFC 7489 section 6.6.1: ToASCII maps U+FF0E to <code>.</code>, the organisational domain resolves to <code>vic.example.com</code>, the policy is found, alignment fails, and the verdict is <code>dmarc=fail</code> with the reject disposition. Observed on OpenDMARC: <code>dmarc=none</code>, message delivered. Rspamd on the identical message returns <code>dmarc=fail</code>.</p>
+
+<h2>Mitigation</h2>
+<p>Perform IDNA ToASCII with UTS-46 processing on the extracted Author Domain before the <code>_dmarc</code> query and before alignment, as RFC 7489 section 6.6.1 requires.</p>
+<p>A partial fix is not enough here. Converting only when a label contains non-ASCII <em>letters</em> resolves the related U-label case but leaves this one open, because the malicious characters are separators and compatibility forms that must be NFKC/UTS-46 mapped to ASCII before the registrable domain is even recognisable.</p>
+
+<h2>Notes</h2>
+<p>Closely related to <code>opendmarc-ulabel-not-converted</code>, which is the same missing conversion reached through a different equivalence class. That entry requires the victim to own an internationalised domain; this one does not, which makes its victim population strictly broader. Both should be fixed by the same change.</p>
+<p>A recorded negative result: the NFC-versus-NFD question is a consensus, not a bug. For an internationalised victim with its policy at the NFC A-label node, Rspamd NFC-normalises an NFD From and finds the policy, and OpenDMARC fails both forms identically, which is simply the U-label case again with no additional asymmetry.</p>
+
+<h2>References</h2>
+<ul>
+<li><a href="https://www.rfc-editor.org/rfc/rfc7489#section-6.6.1">RFC 7489 section 6.6.1 - Extract Author Domain</a></li>
+<li><a href="https://www.rfc-editor.org/rfc/rfc5890">RFC 5890 - Internationalized Domain Names for Applications (IDNA): Definitions and Document Framework</a></li>
+<li><a href="https://www.unicode.org/reports/tr46/">UTS #46: Unicode IDNA Compatibility Processing</a></li>
+<li><a href="https://cwe.mitre.org/data/definitions/1289.html">CWE-1289: Improper Validation of Unsafe Equivalence in Input</a></li>
+<li><a href="https://github.com/trusteddomainproject/OpenDMARC">OpenDMARC repository</a></li>
+<li><a href="https://weitongli.com/">Weitong Li, Virginia Tech - researcher homepage</a></li>
+</ul>
+
+<footer>
+<p>Reported by <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech
+(<a href="mailto:weitongli@vt.edu">weitongli@vt.edu</a>).
+Reproduction environment and full evidence available to the vendor on request.
+CVSS is the researcher's own assessment.</p>
+</footer>
+
+</body>
+</html>

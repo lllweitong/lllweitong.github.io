@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>DMARC pct integer handling: OpenDMARC wraps modulo 2^32 and Rspamd clamps a negative value to zero (OpenDMARC &lt;= 1.4.2 and Rspamd ≤ 4.1.2)</title>
+<style>
+:root { color-scheme: light dark; --fg:#111; --bg:#fff; --muted:#555; --rule:#ddd; --pre:#f5f5f5; --link:#14508c; }
+@media (prefers-color-scheme: dark) {
+  :root { --fg:#e4e4e4; --bg:#161616; --muted:#a0a0a0; --rule:#333; --pre:#1e1e1e; --link:#7fb2e5; }
+}
+body { max-width: 46rem; margin: 2.5rem auto; padding: 0 1.1rem 4rem; background: var(--bg); color: var(--fg);
+       font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+h1 { font-size: 1.35rem; line-height: 1.35; margin: 0 0 1rem; }
+h2 { font-size: 1.05rem; margin: 2rem 0 .6rem; }
+p, li { margin: .6rem 0; }
+a { color: var(--link); }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .87em; }
+pre { background: var(--pre); border: 1px solid var(--rule); padding: .75rem .85rem; overflow-x: auto;
+      font-size: .82rem; line-height: 1.45; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+table { border-collapse: collapse; width: 100%; font-size: .87rem; margin: .7rem 0; }
+th, td { border: 1px solid var(--rule); padding: .35rem .5rem; text-align: left; vertical-align: top; }
+.scroll { overflow-x: auto; }
+.hdr { font-size: .93rem; color: var(--muted); margin: 0 0 1.6rem; }
+.hdr b { color: var(--fg); font-weight: 600; }
+.lead { border-left: 3px solid var(--rule); padding-left: .85rem; margin: 0 0 1.6rem; }
+footer { margin-top: 3rem; padding-top: .8rem; border-top: 1px solid var(--rule);
+         color: var(--muted); font-size: .84rem; }
+</style>
+</head>
+<body>
+
+<h1>DMARC pct integer handling: OpenDMARC wraps modulo 2^32 and Rspamd clamps a negative value to zero (OpenDMARC &lt;= 1.4.2 and Rspamd ≤ 4.1.2)</h1>
+
+<p class="hdr">
+<b>Author:</b> <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech &lt;weitongli@vt.edu&gt;<br>
+<b>Date:</b> 2026-07-31<br>
+<b>Vendor:</b> <a href="http://www.trusteddomain.org/">The Trusted Domain Project and the Rspamd project (Vsevolod Stakhov)</a><br>
+<b>Software:</b> <a href="https://github.com/trusteddomainproject/OpenDMARC">OpenDMARC and Rspamd (two distinct defects on the same tag)</a><br>
+<b>Affected version:</b> OpenDMARC 1.4.2 (32-bit unsigned wrap) and Rspamd 4.1.2, originally isolated on 3.10.2 (negative clamp).<br>
+<b>Vulnerable component:</b> DMARC <code>pct</code> tag parsing and range check<br>
+<b>Vulnerability type:</b> CWE-190 (Integer Overflow or Wraparound) on OpenDMARC; CWE-20 (Improper Input Validation) on Rspamd<br>
+<b>Attack vector:</b> Remote. The attacker must be able to influence the victim's published DMARC record; alternatively an administrator's typo produces the same effect.<br>
+<b>CVSS v3.1:</b> 5.9 (Medium) &mdash; <code>CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:H/A:N</code><br>
+<b>Status:</b> Reproduced on 2026-07-28 against the current release (run <code>20260728-120957</code>) with a scripted reproducer, negative controls, and a second independent implementation as the differential oracle. Nine of nine boundary probes deterministic across three repetitions; the modulo-2^32 model fits every observation.
+</p>
+
+<p class="lead"><b>Impact.</b> pct=4294967296 wraps to 0 and re-validates into an enforcing policy on OpenDMARC; pct=-1 disables enforcement on Rspamd.</p>
+
+<h2>Description</h2>
+<p>On OpenDMARC, a <code>pct</code> in the band [2^32, 2^32+100] silently becomes a valid enforcing policy whose sampling rate is not the one written in the record, with no error emitted to the operator. The band at or above 2^31 produces <code>permerror</code>, which disables <code>p=reject</code> altogether.</p>
+<p>On Rspamd, any negative <code>pct</code> disables enforcement entirely, so forged mail under a <code>p=reject</code> policy is delivered.</p>
+<p>Both directions fail open. The trigger is an administrator typo or an attacker able to influence the published record.</p>
+<p>RFC 7489 section 6.3 defines <code>pct</code> as an integer between 0 and 100. Two implementations mishandle values outside that range in different ways.</p>
+<p>OpenDMARC parses <code>pct</code> into a 32-bit unsigned integer and only then range-checks it, so the record is accepted exactly when <code>pct mod 2^32</code> falls in [0, 100]. A value of 2^32 wraps to 0 and re-validates into an <em>enforcing</em> policy; 2^32+50 silently becomes 50 percent sampling.</p>
+<p>Rspamd never wraps, but clamps a negative <code>pct</code> to 0, which disables enforcement.</p>
+<div class="scroll">
+<table>
+<tr><th><code>pct=</code></th><th>OpenDMARC</th><th>Effect</th></tr>
+<tr><td><code>2147483648</code> (2^31)</td><td>permerror</td><td><code>p=reject</code> not applied — fail-open</td></tr>
+<tr><td><code>4294967295</code> (2^32−1)</td><td>permerror</td><td>fail-open</td></tr>
+<tr><td>2^64</td><td>permerror</td><td>fail-open</td></tr>
+<tr><td><code>4294967296</code> (2^32)</td><td><strong>pass, <code>p=reject</code> applied</strong></td><td>wraps to 0 and re-validates into an enforcing policy</td></tr>
+<tr><td>2^32+50</td><td>pass (<code>pct=50</code>)</td><td>a garbage value silently becomes 50 percent sampling</td></tr>
+<tr><td>2^32+100</td><td>pass (<code>pct=100</code>)</td><td></td></tr>
+<tr><td>2^32+101</td><td>permerror (101)</td><td></td></tr>
+</table>
+</div>
+<p>The model “accept if and only if <code>pct mod 2^32</code> is in [0, 100]” fits all nine probes.</p>
+<p>On Rspamd, 2^31, 2^32−1 and 2^64 all produce full <code>DMARC_POLICY_REJECT</code> on forged mail, so there is no wrap. But <code>pct=-1</code>, <code>pct=-100</code> and <code>pct=-2^31</code> are clamped to 0, which disables enforcement.</p>
+
+<h2>Proof of Concept</h2>
+<pre><code># OpenDMARC: an out-of-range value that becomes an enforcing policy with different sampling
+_dmarc.victim.example.  IN  TXT  "v=DMARC1; p=reject; pct=4294967296"
+
+# Rspamd: a negative value that disables enforcement
+_dmarc.victim.example.  IN  TXT  "v=DMARC1; p=reject; pct=-1"</code></pre>
+<p>Send a forged, unaligned message with <code>From: ceo@victim.example</code>. Required in both cases: the value is out of range, so the record is invalid. Observed: OpenDMARC computes 4294967296 mod 2^32 = 0 and applies <code>p=reject</code> with the sampling rate silently changed; Rspamd clamps to 0 and enforces nothing.</p>
+
+<h2>Mitigation</h2>
+<p>Parse <code>pct</code> into a type wide enough to hold the input, or detect overflow during conversion, and reject any value outside 0 to 100 before any modular reduction. On the Rspamd side, reject a negative value rather than clamping it. Neither implementation should silently substitute a different sampling rate for the one published.</p>
+
+<h2>Notes</h2>
+<p>The “at or above 2^31 yields permerror yields fail-open” half overlaps <code>opendmarc-bad-tag-drops-policy</code>, which already lists an out-of-range <code>pct</code> as a permerror trigger. What is new here is the 32-bit truncation model with its wrap-into-range hole — an out-of-range value producing an <em>enforcing</em> policy, the opposite of a permerror — and the Rspamd negative clamp, which is on a different implementation entirely.</p>
+
+<h2>References</h2>
+<ul>
+<li><a href="https://www.rfc-editor.org/rfc/rfc7489#section-6.3">RFC 7489 section 6.3 - the pct tag</a></li>
+<li><a href="https://www.rfc-editor.org/rfc/rfc7489#section-6.6.4">RFC 7489 section 6.6.4 - Message Sampling</a></li>
+<li><a href="https://cwe.mitre.org/data/definitions/190.html">CWE-190: Integer Overflow or Wraparound</a></li>
+<li><a href="https://github.com/trusteddomainproject/OpenDMARC">OpenDMARC repository</a></li>
+<li><a href="https://rspamd.com/">Rspamd</a></li>
+<li><a href="https://weitongli.com/">Weitong Li, Virginia Tech - researcher homepage</a></li>
+</ul>
+
+<footer>
+<p>Reported by <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech
+(<a href="mailto:weitongli@vt.edu">weitongli@vt.edu</a>).
+Reproduction environment and full evidence available to the vendor on request.
+CVSS is the researcher's own assessment.</p>
+</footer>
+
+</body>
+</html>

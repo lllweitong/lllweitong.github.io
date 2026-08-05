@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Rspamd ignores the DKIM key record&#x27;s s= service-type tag, so a key scoped to a non-email service still signs email (Rspamd ≤ 4.1.2)</title>
+<style>
+:root { color-scheme: light dark; --fg:#111; --bg:#fff; --muted:#555; --rule:#ddd; --pre:#f5f5f5; --link:#14508c; }
+@media (prefers-color-scheme: dark) {
+  :root { --fg:#e4e4e4; --bg:#161616; --muted:#a0a0a0; --rule:#333; --pre:#1e1e1e; --link:#7fb2e5; }
+}
+body { max-width: 46rem; margin: 2.5rem auto; padding: 0 1.1rem 4rem; background: var(--bg); color: var(--fg);
+       font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+h1 { font-size: 1.35rem; line-height: 1.35; margin: 0 0 1rem; }
+h2 { font-size: 1.05rem; margin: 2rem 0 .6rem; }
+p, li { margin: .6rem 0; }
+a { color: var(--link); }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .87em; }
+pre { background: var(--pre); border: 1px solid var(--rule); padding: .75rem .85rem; overflow-x: auto;
+      font-size: .82rem; line-height: 1.45; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+table { border-collapse: collapse; width: 100%; font-size: .87rem; margin: .7rem 0; }
+th, td { border: 1px solid var(--rule); padding: .35rem .5rem; text-align: left; vertical-align: top; }
+.scroll { overflow-x: auto; }
+.hdr { font-size: .93rem; color: var(--muted); margin: 0 0 1.6rem; }
+.hdr b { color: var(--fg); font-weight: 600; }
+.lead { border-left: 3px solid var(--rule); padding-left: .85rem; margin: 0 0 1.6rem; }
+footer { margin-top: 3rem; padding-top: .8rem; border-top: 1px solid var(--rule);
+         color: var(--muted); font-size: .84rem; }
+</style>
+</head>
+<body>
+
+<h1>Rspamd ignores the DKIM key record's s= service-type tag, so a key scoped to a non-email service still signs email (Rspamd ≤ 4.1.2)</h1>
+
+<p class="hdr">
+<b>Author:</b> <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech &lt;weitongli@vt.edu&gt;<br>
+<b>Date:</b> 2026-07-31<br>
+<b>Vendor:</b> <a href="https://rspamd.com/">Rspamd project (Vsevolod Stakhov)</a><br>
+<b>Software:</b> <a href="https://github.com/rspamd/rspamd">Rspamd</a><br>
+<b>Affected version:</b> Rspamd 4.1.2. Originally isolated on 3.10.2 and re-confirmed on 4.1.2 on 2026-07-28. OpenDKIM 2.11.0 and dkimpy 1.1.8 both enforce the tag correctly.<br>
+<b>Vulnerable component:</b> DKIM public-key record handling — the <code>s=</code> service-type tag of RFC 6376 section 3.6.1<br>
+<b>Vulnerability type:</b> CWE-347 (Improper Verification of Cryptographic Signature) / CWE-20 (Improper Input Validation)<br>
+<b>Attack vector:</b> Remote. The victim key record must declare a non-email service type, and the attacker must present a signature made with that key.<br>
+<b>CVSS v3.1:</b> 3.7 (Low) &mdash; <code>CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:L/A:N</code><br>
+<b>Status:</b> Reproduced on 2026-07-28 against the current release (run <code>20260728-120957</code>) with a scripted reproducer, negative controls, and a second independent implementation as the differential oracle. Three deterministic repetitions with <code>s=email</code>, <code>s=*</code> and <code>s=email:tlsrpt</code> controls, independently re-verified with dkimpy as a third oracle.
+</p>
+
+<p class="lead"><b>Impact.</b> A key record published as s=tlsrpt, which must be ignored for email, still yields R_DKIM_ALLOW on Rspamd where OpenDKIM and dkimpy both reject it.</p>
+
+<h2>Description</h2>
+<p>The <code>s=</code> tag exists so that an operator can confine a key to one use. A key provisioned for a reporting or other non-mail service, and deliberately marked as such, is meant to be unusable for signing email even if its private half is exposed to a system that has no business signing mail. On Rspamd that scoping has no effect, and any signature made with such a key is accepted as a valid email signature.</p>
+<p>The bound on this is the same as for the other key-record findings and is stated plainly: the party publishing <code>s=</code> is the party that owns the key, so the missing check does not let an attacker forge a signature for a domain they do not control. What it removes is the operator's ability to compartmentalise key material by purpose, which is precisely the defence-in-depth measure the tag provides. The compromise of a narrowly scoped non-mail key becomes a mail-signing capability on any Rspamd receiver, and on no conforming one.</p>
+<p>RFC 6376 section 3.6.1 defines the key record's <code>s=</code> tag as the service type for which the key may be used, with a default of <code>*</code> meaning all services, and states: <em>“Verifiers for a given service type MUST ignore this record if the appropriate type is not listed.”</em> Email DKIM verification is service type <code>email</code>. A record listing only a non-email service, or an unknown one, must therefore be ignored when verifying mail, leaving no usable key and making the signature fail.</p>
+<p>Rspamd never reads the tag. Its DKIM verdict is invariant to the content of <code>s=</code>, so a key deliberately scoped away from email still returns <code>R_DKIM_ALLOW</code>. OpenDKIM rejects the same record with the reason <code>not an e-mail key</code>, and dkimpy raises a <code>ValidationError</code>.</p>
+<p>The same valid RSA signature is used throughout; only the key record's <code>s=</code> tag varies:</p>
+<div class="scroll">
+<table>
+<tr><th>Key record <code>s=</code></th><th>OpenDKIM</th><th>Rspamd</th><th>dkimpy</th><th>Required</th></tr>
+<tr><td><code>s=email</code> (control)</td><td>pass</td><td><code>R_DKIM_ALLOW</code></td><td>pass</td><td>pass</td></tr>
+<tr><td><code>s=*</code> (control, the RFC default)</td><td>pass</td><td><code>R_DKIM_ALLOW</code></td><td>pass</td><td>pass</td></tr>
+<tr><td><code>s=tlsrpt</code> (a non-email service)</td><td>fail, <code>reason="not an e-mail key"</code></td><td><strong><code>R_DKIM_ALLOW</code></strong></td><td>fail (<code>ValidationError</code>)</td><td>fail</td></tr>
+<tr><td><code>s=foo</code> (an unknown service)</td><td>fail</td><td><strong><code>R_DKIM_ALLOW</code></strong></td><td>fail</td><td>fail</td></tr>
+</table>
+</div>
+<p>OpenDKIM's own reason string names the cause exactly, and dkimpy fails independently, so two implementations agree on the required verdict. The list form <code>s=email:tlsrpt</code> passes on all three, which is correct, because <code>email</code> is listed. Rspamd's verdict is identical in every row, which is the direct evidence that the tag is not consulted rather than parsed and mishandled.</p>
+<p>The <code>s=foo</code> row matters as much as the <code>s=tlsrpt</code> row. An unknown service type is not a special case to be tolerated: section 3.6.1 requires the verifier to ignore any record whose listed types do not include its own, so an unrecognised value must make the record unusable for email rather than be treated as permissive.</p>
+
+<h2>Proof of Concept</h2>
+<p>Publish a key record scoped to a non-email service:</p>
+<pre><code>sel._domainkey.signer.example.  IN TXT "v=DKIM1; k=rsa; s=tlsrpt; p=&lt;base64 RSA public key&gt;"</code></pre>
+<p>Sign an ordinary message with the matching private key:</p>
+<pre><code>DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=signer.example; s=sel;
+    h=from:to:subject:date; bh=&lt;body hash&gt;; b=&lt;signature&gt;</code></pre>
+<p>Required under RFC 6376 section 3.6.1: the record does not list the <code>email</code> service type, so an email verifier must ignore it, leaving no key and failing the signature. Observed on Rspamd: <code>R_DKIM_ALLOW</code>. Observed on OpenDKIM: <code>dkim=fail</code> with <code>reason="not an e-mail key"</code>. Observed on dkimpy: <code>ValidationError</code>.</p>
+<p>Replacing <code>s=tlsrpt</code> with <code>s=email</code>, <code>s=*</code> or <code>s=email:tlsrpt</code> makes all three implementations pass, which isolates the service-type tag as the only variable.</p>
+
+<h2>Mitigation</h2>
+<p>Compare the record's <code>s=</code> list against the verifying service before using the key, applying the RFC 6376 section 3.6.1 default of <code>*</code> when the tag is absent, and treat the record as unusable when <code>email</code> is not listed. An unknown or unparseable service type must make the record unusable for email rather than be treated as permissive.</p>
+
+<h2>Notes</h2>
+<p>Part of the Rspamd DKIM key-record constraint cluster together with <code>rspamd-key-hash-list-ignored</code> (the <code>h=</code> hash list) and <code>rspamd-auid-subtree-unchecked</code> (the <code>i=</code> AUID subtree check). The three share a single shape, namely a constraint the verifier is required to apply and does not, and they would be sensibly disclosed and fixed together.</p>
+<p>Deployment of a non-default <code>s=</code> is uncommon, which bounds field exposure without affecting the conformance claim. Confirmation against upstream <code>rspamd_dkim</code> remains an open step; the divergence recorded here is behavioural.</p>
+
+<h2>References</h2>
+<ul>
+<li><a href="https://www.rfc-editor.org/rfc/rfc6376#section-3.6.1">RFC 6376 section 3.6.1 - Textual Representation (the s= service-type tag)</a></li>
+<li><a href="https://www.rfc-editor.org/rfc/rfc6376#section-6.1.2">RFC 6376 section 6.1.2 - Get the Public Key</a></li>
+<li><a href="https://cwe.mitre.org/data/definitions/347.html">CWE-347: Improper Verification of Cryptographic Signature</a></li>
+<li><a href="https://cwe.mitre.org/data/definitions/20.html">CWE-20: Improper Input Validation</a></li>
+<li><a href="https://rspamd.com/">Rspamd</a></li>
+<li><a href="https://weitongli.com/">Weitong Li, Virginia Tech - researcher homepage</a></li>
+</ul>
+
+<footer>
+<p>Reported by <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech
+(<a href="mailto:weitongli@vt.edu">weitongli@vt.edu</a>).
+Reproduction environment and full evidence available to the vendor on request.
+CVSS is the researcher's own assessment.</p>
+</footer>
+
+</body>
+</html>

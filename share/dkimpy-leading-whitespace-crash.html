@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>dkimpy unhandled IndexError in rfc822_parse() on a message beginning with whitespace (dkimpy ≤ 1.1.8)</title>
+<style>
+:root { color-scheme: light dark; --fg:#111; --bg:#fff; --muted:#555; --rule:#ddd; --pre:#f5f5f5; --link:#14508c; }
+@media (prefers-color-scheme: dark) {
+  :root { --fg:#e4e4e4; --bg:#161616; --muted:#a0a0a0; --rule:#333; --pre:#1e1e1e; --link:#7fb2e5; }
+}
+body { max-width: 46rem; margin: 2.5rem auto; padding: 0 1.1rem 4rem; background: var(--bg); color: var(--fg);
+       font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+h1 { font-size: 1.35rem; line-height: 1.35; margin: 0 0 1rem; }
+h2 { font-size: 1.05rem; margin: 2rem 0 .6rem; }
+p, li { margin: .6rem 0; }
+a { color: var(--link); }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .87em; }
+pre { background: var(--pre); border: 1px solid var(--rule); padding: .75rem .85rem; overflow-x: auto;
+      font-size: .82rem; line-height: 1.45; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+table { border-collapse: collapse; width: 100%; font-size: .87rem; margin: .7rem 0; }
+th, td { border: 1px solid var(--rule); padding: .35rem .5rem; text-align: left; vertical-align: top; }
+.scroll { overflow-x: auto; }
+.hdr { font-size: .93rem; color: var(--muted); margin: 0 0 1.6rem; }
+.hdr b { color: var(--fg); font-weight: 600; }
+.lead { border-left: 3px solid var(--rule); padding-left: .85rem; margin: 0 0 1.6rem; }
+footer { margin-top: 3rem; padding-top: .8rem; border-top: 1px solid var(--rule);
+         color: var(--muted); font-size: .84rem; }
+</style>
+</head>
+<body>
+
+<h1>dkimpy unhandled IndexError in rfc822_parse() on a message beginning with whitespace (dkimpy ≤ 1.1.8)</h1>
+
+<p class="hdr">
+<b>Author:</b> <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech &lt;weitongli@vt.edu&gt;<br>
+<b>Date:</b> 2026-07-31<br>
+<b>Vendor:</b> <a href="https://launchpad.net/dkimpy">dkimpy maintainers (Scott Kitterman et al.)</a><br>
+<b>Software:</b> <a href="https://pypi.org/project/dkimpy/">dkimpy</a><br>
+<b>Affected version:</b> dkimpy 1.1.8 (the version tested); the parsing code is long-standing and earlier releases are expected to be affected.<br>
+<b>Vulnerable component:</b> <code>dkim/__init__.py</code>, <code>rfc822_parse()</code>, line 372<br>
+<b>Vulnerability type:</b> CWE-248 (Uncaught Exception)<br>
+<b>Attack vector:</b> Remote, unauthenticated. One inbound e-mail whose first byte is a space or tab.<br>
+<b>CVSS v3.1:</b> 7.5 (High) &mdash; <code>CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H</code><br>
+<b>Status:</b> Confirmed with a two-byte proof of concept under coverage-guided fuzzing.
+</p>
+
+<p class="lead"><b>Impact.</b> A two-byte message whose first line starts with a space or tab raises an uncaught IndexError out of dkim.DKIM().verify().</p>
+
+<h2>Description</h2>
+<p>Any application that feeds untrusted message bytes to <code>dkim.DKIM()</code> or <code>dkim.verify()</code> and catches only <code>DKIMException</code>, as the documentation instructs, crashes on an attacker-supplied message beginning with a space. In a mail filter that means a processing failure per message, and in a single-threaded filter a service outage; the practical severity depends on how the calling application handles an unexpected exception.</p>
+<p>dkimpy is used by <code>authheaders</code> and by a number of Python mail filters, so the exposure is wider than direct users of the library.</p>
+<p><code>rfc822_parse()</code> appends a header continuation line to the previous header with <code>headers[-1][1] += ...</code>. When the very first line of the message begins with whitespace there is no previous header, <code>headers</code> is still empty, and the indexing raises <code>IndexError</code>. The exception is not caught and not converted to the library's own <code>DKIMException</code>, so it propagates out of <code>DKIM.verify()</code>.</p>
+<p>This matters because the documented contract tells callers to catch <code>DKIMException</code>. An application that follows the documentation will not catch <code>IndexError</code> and will crash.</p>
+<p>The message need not be valid, signed, or even syntactically plausible. Any input whose first byte is a space or tab reaches the defect, because a leading whitespace character is interpreted as a header-folding continuation of a header that does not exist.</p>
+<pre><code>&gt;&gt;&gt; import dkim
+&gt;&gt;&gt; dkim.DKIM(b" \r\n").verify(dnsfunc=lambda n, **k: b"")
+Traceback (most recent call last):
+  ...
+  File ".../dkim/__init__.py", line 372, in rfc822_parse
+    headers[-1][1] += line
+IndexError: list index out of range</code></pre>
+
+<h2>Proof of Concept</h2>
+<pre><code>import dkim
+
+dkim.DKIM(b" \r\n").verify(dnsfunc=lambda n, **k: b"")   # IndexError
+dkim.DKIM(b"\tx\r\n").verify(dnsfunc=lambda n, **k: b"")  # IndexError</code></pre>
+<p>Two bytes are sufficient. Both a space and a tab trigger it.</p>
+
+<h2>Mitigation</h2>
+<p>Treat a continuation line with no preceding header as a malformed message rather than indexing an empty list:</p>
+<pre><code>if line[0] in b' \t':
+    if not headers:
+        raise MessageFormatError("continuation line before any header")
+    headers[-1][1] += line</code></pre>
+<p>Raising the library's own exception type keeps the documented contract intact. Silently ignoring the stray line is the alternative if bug-compatibility with permissive parsers is preferred.</p>
+
+<h2>References</h2>
+<ul>
+<li><a href="https://www.rfc-editor.org/rfc/rfc5322#section-2.2.3">RFC 5322 section 2.2.3 - long header fields and folding</a></li>
+<li><a href="https://cwe.mitre.org/data/definitions/248.html">CWE-248: Uncaught Exception</a></li>
+<li><a href="https://pypi.org/project/dkimpy/">dkimpy on PyPI</a></li>
+<li><a href="https://weitongli.com/">Weitong Li, Virginia Tech - researcher homepage</a></li>
+</ul>
+
+<footer>
+<p>Reported by <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech
+(<a href="mailto:weitongli@vt.edu">weitongli@vt.edu</a>).
+Reproduction environment and full evidence available to the vendor on request.
+CVSS is the researcher's own assessment.</p>
+</footer>
+
+</body>
+</html>

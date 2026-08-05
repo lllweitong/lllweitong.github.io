@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Rspamd ignores DKIM key revocation when a valid p= tag coexists with the empty revocation marker (OpenDKIM &lt;= 2.11.0 and Rspamd ≤ 4.1.2)</title>
+<style>
+:root { color-scheme: light dark; --fg:#111; --bg:#fff; --muted:#555; --rule:#ddd; --pre:#f5f5f5; --link:#14508c; }
+@media (prefers-color-scheme: dark) {
+  :root { --fg:#e4e4e4; --bg:#161616; --muted:#a0a0a0; --rule:#333; --pre:#1e1e1e; --link:#7fb2e5; }
+}
+body { max-width: 46rem; margin: 2.5rem auto; padding: 0 1.1rem 4rem; background: var(--bg); color: var(--fg);
+       font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+h1 { font-size: 1.35rem; line-height: 1.35; margin: 0 0 1rem; }
+h2 { font-size: 1.05rem; margin: 2rem 0 .6rem; }
+p, li { margin: .6rem 0; }
+a { color: var(--link); }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .87em; }
+pre { background: var(--pre); border: 1px solid var(--rule); padding: .75rem .85rem; overflow-x: auto;
+      font-size: .82rem; line-height: 1.45; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+table { border-collapse: collapse; width: 100%; font-size: .87rem; margin: .7rem 0; }
+th, td { border: 1px solid var(--rule); padding: .35rem .5rem; text-align: left; vertical-align: top; }
+.scroll { overflow-x: auto; }
+.hdr { font-size: .93rem; color: var(--muted); margin: 0 0 1.6rem; }
+.hdr b { color: var(--fg); font-weight: 600; }
+.lead { border-left: 3px solid var(--rule); padding-left: .85rem; margin: 0 0 1.6rem; }
+footer { margin-top: 3rem; padding-top: .8rem; border-top: 1px solid var(--rule);
+         color: var(--muted); font-size: .84rem; }
+</style>
+</head>
+<body>
+
+<h1>Rspamd ignores DKIM key revocation when a valid p= tag coexists with the empty revocation marker (OpenDKIM &lt;= 2.11.0 and Rspamd ≤ 4.1.2)</h1>
+
+<p class="hdr">
+<b>Author:</b> <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech &lt;weitongli@vt.edu&gt;<br>
+<b>Date:</b> 2026-07-31<br>
+<b>Vendor:</b> <a href="http://www.trusteddomain.org/">Rspamd project (Vsevolod Stakhov)</a><br>
+<b>Software:</b> <a href="http://www.opendkim.org/">Rspamd (OpenDKIM is also non-conformant, in an order-dependent way)</a><br>
+<b>Affected version:</b> Rspamd 4.1.2, originally isolated on 3.10.2. OpenDKIM 2.11.0 is last-tag-wins; dkimpy is correct.<br>
+<b>Vulnerable component:</b> DKIM public-key record parsing — the <code>p=</code> field and the empty-value revocation marker<br>
+<b>Vulnerability type:</b> CWE-347 (Improper Verification of Cryptographic Signature) / CWE-299 (Improper Check for Certificate Revocation)<br>
+<b>Attack vector:</b> Remote. Requires the victim's key record to carry both values, through a stale entry, a mistaken revocation, or record injection.<br>
+<b>CVSS v3.1:</b> 5.9 (Medium) &mdash; <code>CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:H/A:N</code><br>
+<b>Status:</b> Reproduced on 2026-07-28 against the current release (run <code>20260728-120957</code>) with a scripted reproducer, negative controls, and a second independent implementation as the differential oracle. Five repetitions with single-record controls in both directions.
+</p>
+
+<p class="lead"><b>Impact.</b> A key record carrying both a valid p= and an empty p= still authenticates on Rspamd, in either tag order.</p>
+
+<h2>Description</h2>
+<p>A DKIM revocation bypass on Rspamd. A domain that has revoked a key but left a stale valid <code>p=</code> in the same record, or that fat-fingers the revocation, or whose record an attacker appends <code>; p=&lt;old key&gt;</code> to, still authenticates signatures made with the revoked key. Because the test was configured with SPF <code>-all</code> and <code>p=reject; adkim=s; aspf=s</code>, the resulting <code>dmarc=pass</code> is reachable only through the revoked key, which pins the impact.</p>
+<p>The trigger is a malformed duplicate-tag record, which bounds how often this arises naturally. The consequence when it does — a revoked key authenticating under <code>p=reject</code> — is a genuine authentication bypass.</p>
+<p>RFC 6376 section 3.6.1 states that an empty <code>p=</code> means the key has been revoked, so a verifier must treat a signature made with it as failing. Section 3.2 states that duplicate tag names MUST NOT occur, so a record carrying two <code>p=</code> tags is malformed and should be rejected on that ground alone.</p>
+<p>Rspamd takes the first parseable <code>p=</code> and never honours the empty revocation marker when a valid key coexists. It returns <code>dkim=pass</code> in both tag orders.</p>
+<div class="scroll">
+<table>
+<tr><th>Key record at the selector</th><th>OpenDKIM</th><th>Rspamd</th><th>dkimpy</th></tr>
+<tr><td><code>v=DKIM1; k=rsa; p=&lt;valid&gt;; p=</code></td><td>dkim=fail, “key revoked” → dmarc=fail</td><td><strong>dkim=pass → dmarc=pass</strong></td><td>fail</td></tr>
+<tr><td><code>v=DKIM1; k=rsa; p=; p=&lt;valid&gt;</code></td><td>dkim=pass → dmarc=pass</td><td><strong>dkim=pass → dmarc=pass</strong></td><td>fail</td></tr>
+</table>
+</div>
+<p>OpenDKIM is last-tag-wins, so it happens to fail in one order and pass in the other. Rspamd is first-parseable-wins and passes in both. dkimpy rejects both, which is the correct handling of a duplicate-tag record.</p>
+<p>The controls isolate the mechanism. A single valid record produces consensus <code>dkim=pass</code>; a single clean empty <code>p=</code> revocation produces consensus <code>fail</code> on all three, with OpenDKIM reporting “key revoked”, Rspamd <code>R_DKIM_PERMFAIL</code> and dkimpy a failure. Only the coexistence case diverges, so a clean revocation <em>is</em> honoured by every implementation and the defect is specific to the duplicate record.</p>
+
+<h2>Proof of Concept</h2>
+<pre><code>sel._domainkey.victim.example.  IN TXT "v=DKIM1; k=rsa; p=&lt;valid base64 key&gt;; p="
+_dmarc.victim.example.          IN TXT "v=DMARC1; p=reject; adkim=s; aspf=s"
+victim.example.                 IN TXT "v=spf1 -all"</code></pre>
+<p>Send a message signed with the revoked key, from an unauthorised host so that SPF fails and DMARC can only pass through an aligned DKIM signature. Required: the key is revoked, DKIM fails, DMARC fails. Observed on Rspamd: <code>dkim=pass</code> and therefore <code>dmarc=pass</code>.</p>
+
+<h2>Mitigation</h2>
+<p>Reject a key record containing duplicate tag names, per section 3.2. Independently, honour an empty <code>p=</code> as a revocation even when a valid <code>p=</code> coexists, rather than taking whichever value happens to parse first. OpenDKIM's last-tag-wins behaviour is also non-conformant to section 3.2 and should be fixed in the same way.</p>
+
+<h2>Notes</h2>
+<p>A recorded negative result that bounds the claim: a clean single empty <code>p=</code> revocation, including the variants <code>p= </code>, tag-reordered, missing <code>p=</code>, and no <code>v=</code>, is honoured as revoked by all three implementations. The primary hypothesis — that revocation is broadly unhonoured — is a consensus with no bug. The divergence is specific to the coexistence case.</p>
+
+<h2>References</h2>
+<ul>
+<li><a href="https://www.rfc-editor.org/rfc/rfc6376#section-3.6.1">RFC 6376 section 3.6.1 - Textual Representation (the p= tag and revocation)</a></li>
+<li><a href="https://www.rfc-editor.org/rfc/rfc6376#section-3.2">RFC 6376 section 3.2 - Tag=Value Lists (duplicate tags)</a></li>
+<li><a href="https://cwe.mitre.org/data/definitions/347.html">CWE-347: Improper Verification of Cryptographic Signature</a></li>
+<li><a href="https://rspamd.com/">Rspamd</a></li>
+<li><a href="https://weitongli.com/">Weitong Li, Virginia Tech - researcher homepage</a></li>
+</ul>
+
+<footer>
+<p>Reported by <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech
+(<a href="mailto:weitongli@vt.edu">weitongli@vt.edu</a>).
+Reproduction environment and full evidence available to the vendor on request.
+CVSS is the researcher's own assessment.</p>
+</footer>
+
+</body>
+</html>

@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Rspamd ignores the DKIM key record&#x27;s h= hash-algorithm restriction, so a key verifies signatures made with a hash the key owner excluded (Rspamd ≤ 4.1.2)</title>
+<style>
+:root { color-scheme: light dark; --fg:#111; --bg:#fff; --muted:#555; --rule:#ddd; --pre:#f5f5f5; --link:#14508c; }
+@media (prefers-color-scheme: dark) {
+  :root { --fg:#e4e4e4; --bg:#161616; --muted:#a0a0a0; --rule:#333; --pre:#1e1e1e; --link:#7fb2e5; }
+}
+body { max-width: 46rem; margin: 2.5rem auto; padding: 0 1.1rem 4rem; background: var(--bg); color: var(--fg);
+       font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+h1 { font-size: 1.35rem; line-height: 1.35; margin: 0 0 1rem; }
+h2 { font-size: 1.05rem; margin: 2rem 0 .6rem; }
+p, li { margin: .6rem 0; }
+a { color: var(--link); }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .87em; }
+pre { background: var(--pre); border: 1px solid var(--rule); padding: .75rem .85rem; overflow-x: auto;
+      font-size: .82rem; line-height: 1.45; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+table { border-collapse: collapse; width: 100%; font-size: .87rem; margin: .7rem 0; }
+th, td { border: 1px solid var(--rule); padding: .35rem .5rem; text-align: left; vertical-align: top; }
+.scroll { overflow-x: auto; }
+.hdr { font-size: .93rem; color: var(--muted); margin: 0 0 1.6rem; }
+.hdr b { color: var(--fg); font-weight: 600; }
+.lead { border-left: 3px solid var(--rule); padding-left: .85rem; margin: 0 0 1.6rem; }
+footer { margin-top: 3rem; padding-top: .8rem; border-top: 1px solid var(--rule);
+         color: var(--muted); font-size: .84rem; }
+</style>
+</head>
+<body>
+
+<h1>Rspamd ignores the DKIM key record's h= hash-algorithm restriction, so a key verifies signatures made with a hash the key owner excluded (Rspamd ≤ 4.1.2)</h1>
+
+<p class="hdr">
+<b>Author:</b> <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech &lt;weitongli@vt.edu&gt;<br>
+<b>Date:</b> 2026-07-31<br>
+<b>Vendor:</b> <a href="https://rspamd.com/">Rspamd project (Vsevolod Stakhov)</a><br>
+<b>Software:</b> <a href="https://github.com/rspamd/rspamd">Rspamd</a><br>
+<b>Affected version:</b> Rspamd 4.1.2. Originally isolated on 3.10.2 and re-confirmed on 4.1.2 on 2026-07-28. OpenDKIM 2.11.0 enforces the restriction correctly.<br>
+<b>Vulnerable component:</b> DKIM public-key record handling — the <code>h=</code> acceptable-hash list of RFC 6376 section 3.6.1, which section 6.1.2 requires the verifier to check<br>
+<b>Vulnerability type:</b> CWE-347 (Improper Verification of Cryptographic Signature) / CWE-757 (Selection of Less-Secure Algorithm During Negotiation)<br>
+<b>Attack vector:</b> Remote. The victim key record must publish <code>h=</code>, and the attacker must present a signature whose hash algorithm that list excludes.<br>
+<b>CVSS v3.1:</b> 3.7 (Low) &mdash; <code>CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:L/A:N</code><br>
+<b>Status:</b> Reproduced on 2026-07-28 against the current release (run <code>20260728-120957</code>) with a scripted reproducer, negative controls, and a second independent implementation as the differential oracle. Isolated from a DKIM key-record differential sweep and re-confirmed with a direct OpenDKIM-versus-Rspamd probe in which only the <code>h=</code> tag varies.
+</p>
+
+<p class="lead"><b>Impact.</b> A key record that permits only one hash still verifies a signature made with another, so the h= downgrade restriction is unenforced on Rspamd.</p>
+
+<h2>Description</h2>
+<p>The <code>h=</code> tag is a per-key algorithm policy, and its practical purpose is downgrade protection. A domain that provisions a key for SHA-256 use only publishes <code>h=sha256</code> so that the key can never be honoured for a weaker <code>rsa-sha1</code> signature, which RFC 8301 deprecates but which legacy verifiers still accept. On Rspamd that protection does not exist: the restriction is published, is visible in DNS, and is never consulted.</p>
+<p>The consequence is bounded and should be stated plainly. The party that publishes <code>h=</code> is the party that owns the key, so this is not by itself a route to forging a victim's signature. It removes a receiver-side defence the key owner has explicitly asked for, so an adversary who can produce a signature under an excluded and weaker algorithm — the case <code>h=</code> exists to prevent — is accepted by Rspamd where a conforming verifier refuses the key outright. Operators cannot rely on <code>h=</code> for algorithm agility or for staging a hash migration on any receiver running Rspamd.</p>
+<p>RFC 6376 section 3.6.1 defines the key record's <code>h=</code> tag as the colon-separated list of hash algorithms the key may be used with. Section 6.1.2 step 1 makes the check a MUST: <em>“If the <code>h=</code> tag exists in the public-key record, the hash algorithm implied by the <code>a=</code> tag in the DKIM-Signature header field MUST be included in the contents of the <code>h=</code> tag; if not, the verifier MUST ignore the key record”</em>, which makes the signature fail.</p>
+<p>Rspamd never performs the comparison. Its DKIM verdict is invariant to the content of <code>h=</code>: a key record restricted to one hash still yields <code>R_DKIM_ALLOW</code> for a signature made with a different one. OpenDKIM enforces the restriction and reports <code>dkim=fail</code> with the reason <code>signature-key hash mismatch</code>.</p>
+<p>The probe holds the message, the key and the signature fixed — one valid <code>rsa-sha256</code> signature throughout — and varies only the <code>h=</code> tag of the key record:</p>
+<div class="scroll">
+<table>
+<tr><th>Key record <code>h=</code> tag</th><th>OpenDKIM</th><th>Rspamd</th><th>Required</th></tr>
+<tr><td><code>h=sha256</code> (the signature's algorithm is listed)</td><td>pass</td><td><code>R_DKIM_ALLOW</code></td><td>pass</td></tr>
+<tr><td><code>h=sha1:sha256</code> (listed among several)</td><td>pass</td><td><code>R_DKIM_ALLOW</code></td><td>pass</td></tr>
+<tr><td><code>h=sha1</code> (the signature's algorithm is <em>not</em> listed)</td><td>fail, <code>reason="signature-key hash mismatch"</code></td><td><strong><code>R_DKIM_ALLOW</code></strong></td><td>fail</td></tr>
+<tr><td><em>(no <code>h=</code> tag, control)</em></td><td>pass</td><td><code>R_DKIM_ALLOW</code></td><td>pass</td></tr>
+</table>
+</div>
+<p>The first two rows are what make the finding a genuine under-enforcement rather than a blanket “Rspamd always passes”. Rspamd accepts the legitimately permitted combinations as well, so the verdict is not a constant; it simply never rejects the one combination the specification requires it to reject. The no-<code>h=</code> control establishes the baseline against which the restricted record is compared, and it is identical, which is the direct statement that the tag has no effect on the verdict.</p>
+<p>The tested direction is a key restricted to SHA-1 presented with a SHA-256 signature, because that combination can be produced from a single valid signature without weakening the signature itself. The security-relevant direction is the mirror image, a key restricted to <code>h=sha256</code> presented with an <code>rsa-sha1</code> signature, and it follows from the same invariance: the verifier does not read the tag in either direction.</p>
+
+<h2>Proof of Concept</h2>
+<p>Publish a key record that restricts the key to SHA-1, and sign with SHA-256:</p>
+<pre><code>sel._domainkey.signer.example.  IN TXT "v=DKIM1; k=rsa; h=sha1; p=&lt;base64 RSA public key&gt;"</code></pre>
+<p>Sign the message with the matching private key, using the signature tags:</p>
+<pre><code>DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=signer.example; s=sel;
+    h=from:to:subject:date; bh=&lt;body hash&gt;; b=&lt;signature&gt;</code></pre>
+<p>Required under RFC 6376 section 6.1.2 step 1: the hash implied by <code>a=rsa-sha256</code> is not in the record's <code>h=sha1</code> list, so the verifier must ignore the key record and the signature must fail. Observed on Rspamd: <code>R_DKIM_ALLOW</code>. Observed on OpenDKIM with the identical message and record: <code>dkim=fail</code> with <code>reason="signature-key hash mismatch"</code>.</p>
+<p>Swap <code>h=sha1</code> for <code>h=sha256</code> or <code>h=sha1:sha256</code> and both verifiers pass, which confirms that the rig is exercising the tag and not a broken record.</p>
+
+<h2>Mitigation</h2>
+<p>When the key record carries an <code>h=</code> tag, compare the hash algorithm implied by the signature's <code>a=</code> tag against the list before using the key, and treat the key record as unusable when the algorithm is absent, per RFC 6376 section 6.1.2 step 1. An empty or unparseable <code>h=</code> list should likewise make the record unusable rather than be silently skipped.</p>
+
+<h2>Notes</h2>
+<p>Deployment of the <code>h=</code> key tag is uncommon, which bounds how often the missing check is reachable in the field. That is a statement about exposure, not about correctness: the clause is a MUST, and Rspamd is the outlier against OpenDKIM.</p>
+<p>The divergence is established behaviourally. The point in Rspamd's DKIM verifier at which <code>h=</code> is parsed but not enforced has not been identified in source, and confirmation against upstream <code>rspamd_dkim</code> remains an open step, so this report describes observed behaviour rather than a specific code path.</p>
+<p>Part of the Rspamd DKIM constraint cluster together with <code>rspamd-auid-subtree-unchecked</code> (the <code>i=</code> AUID subtree check) and <code>rspamd-key-service-tag-ignored</code> (the <code>s=</code> service type). All three are the same shape: a constraint the specification requires the verifier to check is parsed or skipped but never applied.</p>
+
+<h2>References</h2>
+<ul>
+<li><a href="https://www.rfc-editor.org/rfc/rfc6376#section-6.1.2">RFC 6376 section 6.1.2 - Get the Public Key (step 1, the h= check)</a></li>
+<li><a href="https://www.rfc-editor.org/rfc/rfc6376#section-3.6.1">RFC 6376 section 3.6.1 - Textual Representation (the h= key tag)</a></li>
+<li><a href="https://www.rfc-editor.org/rfc/rfc8301">RFC 8301 - Cryptographic Algorithm and Key Usage Update to DKIM</a></li>
+<li><a href="https://cwe.mitre.org/data/definitions/347.html">CWE-347: Improper Verification of Cryptographic Signature</a></li>
+<li><a href="https://rspamd.com/">Rspamd</a></li>
+<li><a href="https://weitongli.com/">Weitong Li, Virginia Tech - researcher homepage</a></li>
+</ul>
+
+<footer>
+<p>Reported by <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech
+(<a href="mailto:weitongli@vt.edu">weitongli@vt.edu</a>).
+Reproduction environment and full evidence available to the vendor on request.
+CVSS is the researcher's own assessment.</p>
+</footer>
+
+</body>
+</html>

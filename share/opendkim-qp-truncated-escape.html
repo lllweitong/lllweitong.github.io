@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>OpenDKIM input-buffer over-read in dkim_qp_decode() on a truncated quoted-printable escape (OpenDKIM ≤ 2.11.0)</title>
+<style>
+:root { color-scheme: light dark; --fg:#111; --bg:#fff; --muted:#555; --rule:#ddd; --pre:#f5f5f5; --link:#14508c; }
+@media (prefers-color-scheme: dark) {
+  :root { --fg:#e4e4e4; --bg:#161616; --muted:#a0a0a0; --rule:#333; --pre:#1e1e1e; --link:#7fb2e5; }
+}
+body { max-width: 46rem; margin: 2.5rem auto; padding: 0 1.1rem 4rem; background: var(--bg); color: var(--fg);
+       font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+h1 { font-size: 1.35rem; line-height: 1.35; margin: 0 0 1rem; }
+h2 { font-size: 1.05rem; margin: 2rem 0 .6rem; }
+p, li { margin: .6rem 0; }
+a { color: var(--link); }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .87em; }
+pre { background: var(--pre); border: 1px solid var(--rule); padding: .75rem .85rem; overflow-x: auto;
+      font-size: .82rem; line-height: 1.45; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+table { border-collapse: collapse; width: 100%; font-size: .87rem; margin: .7rem 0; }
+th, td { border: 1px solid var(--rule); padding: .35rem .5rem; text-align: left; vertical-align: top; }
+.scroll { overflow-x: auto; }
+.hdr { font-size: .93rem; color: var(--muted); margin: 0 0 1.6rem; }
+.hdr b { color: var(--fg); font-weight: 600; }
+.lead { border-left: 3px solid var(--rule); padding-left: .85rem; margin: 0 0 1.6rem; }
+footer { margin-top: 3rem; padding-top: .8rem; border-top: 1px solid var(--rule);
+         color: var(--muted); font-size: .84rem; }
+</style>
+</head>
+<body>
+
+<h1>OpenDKIM input-buffer over-read in dkim_qp_decode() on a truncated quoted-printable escape (OpenDKIM ≤ 2.11.0)</h1>
+
+<p class="hdr">
+<b>Author:</b> <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech &lt;weitongli@vt.edu&gt;<br>
+<b>Date:</b> 2026-07-31<br>
+<b>Vendor:</b> <a href="http://www.trusteddomain.org/">The Trusted Domain Project</a><br>
+<b>Software:</b> <a href="http://www.opendkim.org/">OpenDKIM (libopendkim)</a><br>
+<b>Affected version:</b> OpenDKIM 2.11.0 (<code>2.11.0~beta2-9.1+b1</code>) and current upstream <code>master</code>.<br>
+<b>Vulnerable component:</b> <code>libopendkim/util.c</code>, <code>dkim_qp_decode()</code> line 344; reached from <code>dkim_sig_domainok()</code> at <code>dkim.c:1602</code><br>
+<b>Vulnerability type:</b> CWE-125 (Out-of-bounds Read)<br>
+<b>Attack vector:</b> Remote, unauthenticated. One inbound e-mail carrying a DKIM-Signature header with an <code>i=</code> tag.<br>
+<b>CVSS v3.1:</b> 8.2 (High) &mdash; <code>CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:H</code><br>
+<b>Status:</b> AddressSanitizer-confirmed against a library already patched for the two earlier <code>libopendkim</code> defects, the output-side off-by-one in the same function and the <code>h=</code> tag write.
+</p>
+
+<p class="lead"><b>Impact.</b> An i= tag ending in a bare '=' makes the decoder skip past the NUL terminator and read beyond the end of the input buffer.</p>
+
+<h2>Description</h2>
+<p>An out-of-bounds read of the heap buffer holding the DKIM-Signature tag value, on every inbound signed message whose <code>i=</code> tag ends in a truncated escape. Under a sanitizer or a hardened allocator the verifier crashes, denying mail processing; on an ordinary build the decoder consumes adjacent heap bytes into the decoded AUID, which is then compared against the signing domain.</p>
+<p>The quoted-printable decoder advances its input pointer by two after recognising a hexadecimal escape. When the input ends in a truncated escape — a trailing <code>=</code>, or <code>=</code> followed by a single hex digit — the escape is still recognised, because <code>strchr(hexdigits, next)</code> matches the NUL terminator itself, and <code>p += 2</code> then steps past the end of the string. The next loop iteration dereferences <code>*p</code> beyond the allocation.</p>
+<pre><code>for (p = in, q = out; *p != '\0'; p++)        /* util.c:344 - *p reads out of bounds */
+{
+        switch (*p)
+        {
+          case '=':
+                next1 = *(p + 1);
+                if (next1 != '\0') next2 = *(p + 2);
+                ...
+                pos = strchr(hexdigits, next1);   /* matches the NUL terminator */
+                ...
+                p += 2;                           /* overshoots the NUL */</code></pre>
+<p>The trap is that <code>strchr()</code> treats its terminating NUL as part of the searched string and returns a non-NULL pointer for a NUL needle. A truncated escape therefore takes the hexadecimal path, and the unconditional <code>p += 2</code> moves the cursor past the end of the input.</p>
+<pre><code>==ERROR== AddressSanitizer: heap-buffer-overflow
+READ of size 1 at 0x...
+    #0 dkim_qp_decode util.c:344
+    #1 dkim_sig_domainok dkim.c:1602</code></pre>
+<p>This is a distinct defect from <code>opendkim-qp-off-by-one</code> in the same function. That one is an <em>output</em>-side off-by-one; this is an <em>input</em>-side over-run, and each needs its own fix. It was only reachable once the off-by-one and the <code>h=</code> tag write had been patched, because the earlier crashes masked it.</p>
+
+<h2>Proof of Concept</h2>
+<p>A DKIM-Signature whose <code>i=</code> value ends in a bare <code>=</code>, or in <code>=</code> followed by exactly one hexadecimal digit:</p>
+<pre><code>DKIM-Signature: v=1; a=rsa-sha256; d=example.com; s=s1;
+ i=user@example.com:=001;
+ h=from; bh=...; b=...</code></pre>
+<pre><code># libopendkim patched for the two earlier defects, rebuilt with -fsanitize=address
+./fuzz_odkim_verify crashes_dkv2/d-crash-...
+==ERROR== AddressSanitizer: heap-buffer-overflow READ of size 1
+          ... dkim_qp_decode util.c:344 &lt;- dkim_sig_domainok dkim.c:1602</code></pre>
+
+<h2>Mitigation</h2>
+<pre><code>       case '=':
+            next1 = *(p + 1);
++           if (next1 == '\0') break;           /* truncated escape at end of input */
+            if (next1 != '\0') next2 = *(p + 2);
+            ...
+            pos = strchr(hexdigits, next1);
+            if (pos == NULL) return -1;
++           if (next2 == '\0') break;
+            pos = strchr(hexdigits, next2);
+            ...
+            p += 2;</code></pre>
+<p>The root cause to guard against is <code>strchr(hexdigits, '\0')</code> matching the terminator. Reject a NUL as a hexadecimal digit explicitly, and never advance <code>p</code> past the terminator.</p>
+
+<h2>Notes</h2>
+<p>Found by re-running the verification fuzzer against a library already patched for <code>opendkim-qp-off-by-one</code> and <code>opendkim-h-tag-oob-write</code>, which is why it should be treated as an independent issue rather than an incomplete fix for the off-by-one.</p>
+
+<h2>References</h2>
+<ul>
+<li><a href="https://www.rfc-editor.org/rfc/rfc6376#section-3.5">RFC 6376 section 3.5 - the i= (AUID) tag</a></li>
+<li><a href="https://www.rfc-editor.org/rfc/rfc2045#section-6.7">RFC 2045 section 6.7 - Quoted-Printable Content-Transfer-Encoding</a></li>
+<li><a href="https://cwe.mitre.org/data/definitions/125.html">CWE-125: Out-of-bounds Read</a></li>
+<li><a href="http://www.opendkim.org/">OpenDKIM project</a></li>
+<li><a href="https://weitongli.com/">Weitong Li, Virginia Tech - researcher homepage</a></li>
+</ul>
+
+<footer>
+<p>Reported by <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech
+(<a href="mailto:weitongli@vt.edu">weitongli@vt.edu</a>).
+Reproduction environment and full evidence available to the vendor on request.
+CVSS is the researcher's own assessment.</p>
+</footer>
+
+</body>
+</html>

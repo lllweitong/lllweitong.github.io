@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>OpenDMARC wild-pointer dereference in opendmarc_spf_ipv6_explode() via a malformed ip6: mechanism (OpenDMARC ≤ 1.4.2)</title>
+<style>
+:root { color-scheme: light dark; --fg:#111; --bg:#fff; --muted:#555; --rule:#ddd; --pre:#f5f5f5; --link:#14508c; }
+@media (prefers-color-scheme: dark) {
+  :root { --fg:#e4e4e4; --bg:#161616; --muted:#a0a0a0; --rule:#333; --pre:#1e1e1e; --link:#7fb2e5; }
+}
+body { max-width: 46rem; margin: 2.5rem auto; padding: 0 1.1rem 4rem; background: var(--bg); color: var(--fg);
+       font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+h1 { font-size: 1.35rem; line-height: 1.35; margin: 0 0 1rem; }
+h2 { font-size: 1.05rem; margin: 2rem 0 .6rem; }
+p, li { margin: .6rem 0; }
+a { color: var(--link); }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .87em; }
+pre { background: var(--pre); border: 1px solid var(--rule); padding: .75rem .85rem; overflow-x: auto;
+      font-size: .82rem; line-height: 1.45; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+table { border-collapse: collapse; width: 100%; font-size: .87rem; margin: .7rem 0; }
+th, td { border: 1px solid var(--rule); padding: .35rem .5rem; text-align: left; vertical-align: top; }
+.scroll { overflow-x: auto; }
+.hdr { font-size: .93rem; color: var(--muted); margin: 0 0 1.6rem; }
+.hdr b { color: var(--fg); font-weight: 600; }
+.lead { border-left: 3px solid var(--rule); padding-left: .85rem; margin: 0 0 1.6rem; }
+footer { margin-top: 3rem; padding-top: .8rem; border-top: 1px solid var(--rule);
+         color: var(--muted); font-size: .84rem; }
+</style>
+</head>
+<body>
+
+<h1>OpenDMARC wild-pointer dereference in opendmarc_spf_ipv6_explode() via a malformed ip6: mechanism (OpenDMARC ≤ 1.4.2)</h1>
+
+<p class="hdr">
+<b>Author:</b> <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech &lt;weitongli@vt.edu&gt;<br>
+<b>Date:</b> 2026-07-31<br>
+<b>Vendor:</b> <a href="http://www.trusteddomain.org/">The Trusted Domain Project</a><br>
+<b>Software:</b> <a href="https://github.com/trusteddomainproject/OpenDMARC">OpenDMARC (libopendmarc, internal SPF engine)</a><br>
+<b>Affected version:</b> OpenDMARC 1.4.2 and earlier, and current upstream <code>master</code>, when built <code>--with-spf</code> <em>without</em> libspf2.<br>
+<b>Vulnerable component:</b> <code>libopendmarc/opendmarc_spf.c</code>, <code>opendmarc_spf_ipv6_explode()</code> line 729, reached from <code>opendmarc_spf_ipv6_cidr_check()</code> line 798<br>
+<b>Vulnerability type:</b> CWE-476 (NULL Pointer Dereference) / invalid pointer dereference<br>
+<b>Attack vector:</b> Remote. The malformed IPv6 literal comes from the attacker-published SPF record; a single message from that domain drives evaluation.<br>
+<b>CVSS v3.1:</b> 7.5 (High) &mdash; <code>CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H</code><br>
+<b>Status:</b> AddressSanitizer-confirmed; the harness crashed within about 35 iterations.
+</p>
+
+<p class="lead"><b>Impact.</b> A short IPv6 literal in an attacker-published SPF record makes the parser compute NULL+1 and dereference address 0x1.</p>
+
+<h2>Description</h2>
+<p>Remote crash of the OpenDMARC process on affected builds, denying DMARC and SPF evaluation and, depending on the milter failure mode, mail delivery. The attacker needs only to publish an SPF record under a domain they control and send one message.</p>
+<p>The IPv6 expander walks up to eight colon-separated segments. When a segment contains no further colon, <code>strchr()</code> returns NULL, but the code advances unconditionally with <code>cp = ep + 1</code>, producing the pointer <code>0x1</code>. If iterations remain — that is, if the literal has fewer than eight segments and no <code>::</code> compression to fill the remainder — the next iteration calls <code>strchr((char *) 0x1, ':')</code> and faults.</p>
+<pre><code>cp = copy;
+for (i = 7; i &gt;= 0; i--)
+{
+        ep = strchr(cp, ':');           /* line 729 - crashes when cp == (char *) 1 */
+        if (ep != NULL)
+                *ep = '\0';
+        ...
+        cp = ep + 1;                    /* when ep == NULL: cp = NULL + 1 = 0x1 */
+}</code></pre>
+<pre><code>ERROR: AddressSanitizer: SEGV on unknown address 0x000000000001
+    #1 strchr
+    #2 opendmarc_spf_ipv6_explode opendmarc_spf.c:729
+    #3 opendmarc_spf_ipv6_cidr_check opendmarc_spf.c:798</code></pre>
+
+<h2>Proof of Concept</h2>
+<p>The in-process harness takes <code>&lt;ipv6_string&gt;\0&lt;cidr&gt;</code>. A malformed literal with too few segments and no <code>::</code> compression reproduces deterministically, for example a value ending <code>...:0:0:0:0:1</code> with CIDR <code>::/0</code>.</p>
+<pre><code>./fuzz_odmarc_spf poc_ipv6
+ERROR: AddressSanitizer: SEGV on unknown address 0x000000000001
+       ... opendmarc_spf_ipv6_explode opendmarc_spf.c:729</code></pre>
+<p>The real-world trigger is a published SPF record:</p>
+<pre><code>attacker.example.  IN  TXT  "v=spf1 ip6:&lt;malformed literal&gt; -all"</code></pre>
+<p>followed by one message from that domain, evaluated by a receiver whose OpenDMARC uses the internal SPF engine.</p>
+
+<h2>Mitigation</h2>
+<pre><code>-        cp = ep + 1;
++        if (ep == NULL)
++                break;
++        cp = ep + 1;</code></pre>
+<p>Do not form <code>ep + 1</code> when <code>ep</code> is NULL, and stop the loop once the literal is exhausted.</p>
+
+<h2>Notes</h2>
+<p><strong>Build-dependent.</strong> The affected code lives in the internal SPF parser, which is compiled only when OpenDMARC is built <code>--with-spf</code> and <em>without</em> libspf2. Builds that link libspf2 route SPF through <code>opendmarc_spf2.c</code> and never reach this function. The report should be scoped to the internal-SPF configuration.</p>
+
+<h2>References</h2>
+<ul>
+<li><a href="https://www.rfc-editor.org/rfc/rfc7208#section-5.6">RFC 7208 - Sender Policy Framework (SPF), section 5.6 (the ip4 and ip6 mechanisms)</a></li>
+<li><a href="https://cwe.mitre.org/data/definitions/476.html">CWE-476: NULL Pointer Dereference</a></li>
+<li><a href="https://github.com/trusteddomainproject/OpenDMARC">OpenDMARC repository</a></li>
+<li><a href="https://weitongli.com/">Weitong Li, Virginia Tech - researcher homepage</a></li>
+</ul>
+
+<footer>
+<p>Reported by <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech
+(<a href="mailto:weitongli@vt.edu">weitongli@vt.edu</a>).
+Reproduction environment and full evidence available to the vendor on request.
+CVSS is the researcher's own assessment.</p>
+</footer>
+
+</body>
+</html>

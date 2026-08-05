@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>libspf2 memory leak on the SPF_response_add_error() error path (libspf2 ≤ 1.2.10)</title>
+<style>
+:root { color-scheme: light dark; --fg:#111; --bg:#fff; --muted:#555; --rule:#ddd; --pre:#f5f5f5; --link:#14508c; }
+@media (prefers-color-scheme: dark) {
+  :root { --fg:#e4e4e4; --bg:#161616; --muted:#a0a0a0; --rule:#333; --pre:#1e1e1e; --link:#7fb2e5; }
+}
+body { max-width: 46rem; margin: 2.5rem auto; padding: 0 1.1rem 4rem; background: var(--bg); color: var(--fg);
+       font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+h1 { font-size: 1.35rem; line-height: 1.35; margin: 0 0 1rem; }
+h2 { font-size: 1.05rem; margin: 2rem 0 .6rem; }
+p, li { margin: .6rem 0; }
+a { color: var(--link); }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .87em; }
+pre { background: var(--pre); border: 1px solid var(--rule); padding: .75rem .85rem; overflow-x: auto;
+      font-size: .82rem; line-height: 1.45; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+table { border-collapse: collapse; width: 100%; font-size: .87rem; margin: .7rem 0; }
+th, td { border: 1px solid var(--rule); padding: .35rem .5rem; text-align: left; vertical-align: top; }
+.scroll { overflow-x: auto; }
+.hdr { font-size: .93rem; color: var(--muted); margin: 0 0 1.6rem; }
+.hdr b { color: var(--fg); font-weight: 600; }
+.lead { border-left: 3px solid var(--rule); padding-left: .85rem; margin: 0 0 1.6rem; }
+footer { margin-top: 3rem; padding-top: .8rem; border-top: 1px solid var(--rule);
+         color: var(--muted); font-size: .84rem; }
+</style>
+</head>
+<body>
+
+<h1>libspf2 memory leak on the SPF_response_add_error() error path (libspf2 ≤ 1.2.10)</h1>
+
+<p class="hdr">
+<b>Author:</b> <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech &lt;weitongli@vt.edu&gt;<br>
+<b>Date:</b> 2026-07-31<br>
+<b>Vendor:</b> <a href="https://github.com/shevek/libspf2">libspf2 maintainers</a><br>
+<b>Software:</b> <a href="https://github.com/shevek/libspf2">libspf2</a><br>
+<b>Affected version:</b> Current upstream <code>master</code>; the Debian package <code>1.2.10-8.3</code> was present in the test environment.<br>
+<b>Vulnerable component:</b> <code>SPF_response_add_error()</code> error path; the allocated error buffer is not freed when the <code>SPF_response</code> is destroyed<br>
+<b>Vulnerability type:</b> CWE-401 (Missing Release of Memory after Effective Lifetime)<br>
+<b>Attack vector:</b> Remote. Each evaluation of a malformed SPF record leaks; the record is published by the sending domain.<br>
+<b>CVSS v3.1:</b> 5.3 (Medium) &mdash; <code>CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L</code><br>
+<b>Status:</b> LeakSanitizer-confirmed via the SPF interpretation harness over a malformed-record corpus.
+</p>
+
+<p class="lead"><b>Impact.</b> Every malformed SPF evaluation leaks a buffer that is never freed when the response is torn down.</p>
+
+<h2>Description</h2>
+<p>Gradual memory exhaustion in a long-lived process that evaluates SPF over attacker-influenced records. Realistically this needs sustained volume of malformed evaluations to matter, which is why it is rated low, but the input is entirely under the sender's control and no authentication is required.</p>
+<p>When libspf2 records an error against an <code>SPF_response</code> it allocates a buffer that the response teardown path does not free. A receiver that evaluates attacker-influenced SPF records therefore leaks a small amount of memory per malformed evaluation, and the growth is unbounded under sustained malformed traffic.</p>
+<pre><code>==ERROR== LeakSanitizer: detected memory leaks
+  Direct leak of N byte(s) in M object(s) allocated from:
+    ... SPF_response_add_error ...</code></pre>
+<p>The leak is on the error path specifically, so well-formed records do not trigger it; the attacker needs to induce an SPF evaluation error, which publishing a malformed record achieves.</p>
+
+<h2>Proof of Concept</h2>
+<pre><code>export BUILD="$HOME/asan-build"
+bash lib/build_spf.sh          # builds fuzz_spf_compile and fuzz_spf_interp
+
+ASAN_OPTIONS=detect_leaks=1 "$BUILD/fuzz_spf_interp" corpus_spf/
+# or a single error-path input:
+ASAN_OPTIONS=detect_leaks=1 "$BUILD/fuzz_spf_interp" memory-safety/seeds/L1-spf-leak</code></pre>
+
+<h2>Mitigation</h2>
+<p>Free the error buffer on every <code>SPF_response</code> teardown path.</p>
+
+<h2>Notes</h2>
+<p>A leak only; no corruption, and the lowest severity in this reporting set. Two items are outstanding before vendor contact: re-confirmation against the current libspf2 release, and a minimised single input pinning the exact error term, rather than relying on the corpus.</p>
+
+<h2>References</h2>
+<ul>
+<li><a href="https://www.rfc-editor.org/rfc/rfc7208">RFC 7208 - Sender Policy Framework (SPF)</a></li>
+<li><a href="https://cwe.mitre.org/data/definitions/401.html">CWE-401: Missing Release of Memory after Effective Lifetime</a></li>
+<li><a href="https://github.com/shevek/libspf2">libspf2</a></li>
+<li><a href="https://weitongli.com/">Weitong Li, Virginia Tech - researcher homepage</a></li>
+</ul>
+
+<footer>
+<p>Reported by <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech
+(<a href="mailto:weitongli@vt.edu">weitongli@vt.edu</a>).
+Reproduction environment and full evidence available to the vendor on request.
+CVSS is the researcher's own assessment.</p>
+</footer>
+
+</body>
+</html>

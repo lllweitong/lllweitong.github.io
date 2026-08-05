@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>The OpenDKIM and OpenDMARC milter chain does not strip a forged Authentication-Results header bearing its own trusted authserv-id (OpenDKIM &lt;= 2.11.0 and OpenDMARC ≤ 1.4.2)</title>
+<style>
+:root { color-scheme: light dark; --fg:#111; --bg:#fff; --muted:#555; --rule:#ddd; --pre:#f5f5f5; --link:#14508c; }
+@media (prefers-color-scheme: dark) {
+  :root { --fg:#e4e4e4; --bg:#161616; --muted:#a0a0a0; --rule:#333; --pre:#1e1e1e; --link:#7fb2e5; }
+}
+body { max-width: 46rem; margin: 2.5rem auto; padding: 0 1.1rem 4rem; background: var(--bg); color: var(--fg);
+       font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+h1 { font-size: 1.35rem; line-height: 1.35; margin: 0 0 1rem; }
+h2 { font-size: 1.05rem; margin: 2rem 0 .6rem; }
+p, li { margin: .6rem 0; }
+a { color: var(--link); }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .87em; }
+pre { background: var(--pre); border: 1px solid var(--rule); padding: .75rem .85rem; overflow-x: auto;
+      font-size: .82rem; line-height: 1.45; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+table { border-collapse: collapse; width: 100%; font-size: .87rem; margin: .7rem 0; }
+th, td { border: 1px solid var(--rule); padding: .35rem .5rem; text-align: left; vertical-align: top; }
+.scroll { overflow-x: auto; }
+.hdr { font-size: .93rem; color: var(--muted); margin: 0 0 1.6rem; }
+.hdr b { color: var(--fg); font-weight: 600; }
+.lead { border-left: 3px solid var(--rule); padding-left: .85rem; margin: 0 0 1.6rem; }
+footer { margin-top: 3rem; padding-top: .8rem; border-top: 1px solid var(--rule);
+         color: var(--muted); font-size: .84rem; }
+</style>
+</head>
+<body>
+
+<h1>The OpenDKIM and OpenDMARC milter chain does not strip a forged Authentication-Results header bearing its own trusted authserv-id (OpenDKIM &lt;= 2.11.0 and OpenDMARC ≤ 1.4.2)</h1>
+
+<p class="hdr">
+<b>Author:</b> <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech &lt;weitongli@vt.edu&gt;<br>
+<b>Date:</b> 2026-07-31<br>
+<b>Vendor:</b> <a href="http://www.trusteddomain.org/">The Trusted Domain Project</a><br>
+<b>Software:</b> <a href="http://www.opendkim.org/">OpenDKIM and OpenDMARC, as a milter chain</a><br>
+<b>Affected version:</b> OpenDKIM 2.11.0 and OpenDMARC 1.4.2, chained behind Postfix.<br>
+<b>Vulnerable component:</b> Authentication-Results handling — the RFC 8601 section 5 requirement to delete forged instances bearing the host's own authentication service identifier<br>
+<b>Vulnerability type:</b> CWE-290 (Authentication Bypass by Spoofing) / CWE-345 (Insufficient Verification of Data Authenticity)<br>
+<b>Attack vector:</b> Remote, unauthenticated. One inbound message with a prepended header.<br>
+<b>CVSS v3.1:</b> 5.8 (Medium) &mdash; <code>CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:N/I:L/A:N</code><br>
+<b>Status:</b> Reproduced on 2026-07-28 against the current release (run <code>20260728-120957</code>) with a scripted reproducer, negative controls, and a second independent implementation as the differential oracle. Seven-variant survival table with foreign-identifier and baseline controls, using distinct <code>.com</code> organisations.
+</p>
+
+<p class="lead"><b>Impact.</b> Six of seven forged Authentication-Results variants carrying the receiver's own trusted identifier survive into the delivered message.</p>
+
+<h2>Description</h2>
+<p>The impact is on downstream consumers, and this entry is scoped to that. Neither in-chain verifier's own verdict is affected: OpenDMARC reads the milter result rather than re-parsing inbound headers, and Rspamd recomputes, so both still report <code>dmarc=fail</code>.</p>
+<p>The harm falls on anything that reads the delivered message and trusts the header: a Sieve rule or log parser that greps for <code>Authentication-Results: receiver.test; ... dmarc=pass</code>, a filter that trusts the first <code>dmarc=pass</code> from a trusted identifier, or a consumer that reads the Authentication-Results header nearest the <code>From</code>. The milter's genuine lines are prepended at the top, so the forged survivor sits lower, just above <code>From</code> — exactly where a bottom-up reader looks. This is precisely the attack section 5 exists to prevent.</p>
+<p>RFC 8601 section 5 is a MUST: <em>“any MTA conforming to this specification MUST delete any discovered instance of this header field that claims, by virtue of its authentication service identifier, to have been added within its trust boundary but that did not come directly from another trusted MTA.”</em></p>
+<p>The chain does this only partially. OpenDKIM removes a pre-existing Authentication-Results header bearing the trusted identifier <em>only when it carries a <code>dkim=</code> token</em>; OpenDMARC removes nothing. A forged header bearing the trusted identifier but omitting <code>dkim=</code> therefore survives the whole chain and is delivered.</p>
+<p>A forged, genuinely failing message — <code>From=victim.com</code> under <code>p=reject; adkim=s; aspf=s</code>, no aligned DKIM, envelope in <code>attacker.net</code> — with a forged Authentication-Results header prepended as the first header. The trusted identifier is <code>receiver.test</code>:</p>
+<div class="scroll">
+<table>
+<tr><th>Forged header</th><th>OpenDMARC's own fresh verdict</th><th>Does the forged pass survive?</th></tr>
+<tr><td>V1: <code>dkim=pass; spf=pass; dmarc=pass</code> (carries <code>dkim=</code>)</td><td>fail</td><td><strong>no — stripped</strong></td></tr>
+<tr><td>V2: <code>dmarc=pass</code> only</td><td>fail</td><td>yes — survives</td></tr>
+<tr><td>V3: <code>spf=pass</code> only</td><td>fail</td><td>yes — survives</td></tr>
+<tr><td>V4: <code>spf=pass; dmarc=pass</code></td><td>fail</td><td>yes — survives</td></tr>
+<tr><td>V5: identifier as <code>Receiver.TEST</code> (case variant) + <code>dmarc=pass</code></td><td>fail</td><td>yes — survives</td></tr>
+<tr><td>V6: identifier with a CFWS comment + <code>dmarc=pass</code></td><td>fail</td><td>yes — survives</td></tr>
+<tr><td>V7: folded header value + <code>dmarc=pass</code></td><td>fail</td><td>yes — survives</td></tr>
+</table>
+</div>
+<p>Six of seven survive. The only one removed is the variant carrying a <code>dkim=</code> token, which pins the cause: only OpenDKIM performs the section 5 removal, and only for headers pertaining to DKIM.</p>
+<p>Two controls confirm the mechanism. A forged header with a <em>foreign</em> identifier (<code>attacker.invalid</code>) also survives — which is <em>correct</em>, since section 5 mandates removing only the host's own identifier and leaves foreign ones for the downstream trust decision. That control rules out “all injected headers pass through” as the explanation. The baseline with no inbound header shows the milter stamping its genuine <code>dmarc=fail</code>.</p>
+
+<h2>Proof of Concept</h2>
+<p>Prepend, as the very first header of a message that genuinely fails DMARC:</p>
+<pre><code>Authentication-Results: receiver.test; dmarc=pass header.from=victim.com
+From: ceo@victim.com
+To: user@receiver.test
+Subject: wire transfer</code></pre>
+<p>Required: the receiving MTA deletes the header, because it claims the receiver's own trusted identifier and did not come from another trusted MTA. Observed: the header survives the whole chain into the delivered message, sitting immediately above <code>From</code> and indistinguishable from a genuine stamp.</p>
+
+<h2>Mitigation</h2>
+<p>OpenDMARC should remove any pre-existing Authentication-Results header bearing its configured <code>AuthservID</code>, regardless of which authentication methods that header reports. If the design intends to rely on OpenDKIM for the section 5 removal, that reliance must be documented as insufficient, since OpenDKIM covers only headers carrying a <code>dkim=</code> token. Identifier comparison should also be case-insensitive and CFWS-tolerant, as variants V5 and V6 show those forms are currently not matched.</p>
+
+<h2>Notes</h2>
+<p>Scoped honestly: the laboratory-confirmable part is the deterministic non-removal of a forged header bearing the trusted identifier from the delivered message. Whether a given downstream consumer is fooled depends on that consumer and was not measured here.</p>
+
+<h2>References</h2>
+<ul>
+<li><a href="https://www.rfc-editor.org/rfc/rfc8601#section-5">RFC 8601 section 5 - Removing Existing Header Fields</a></li>
+<li><a href="https://www.rfc-editor.org/rfc/rfc8601#section-2.7">RFC 8601 section 2.7 - Defined Methods and Result Values</a></li>
+<li><a href="https://cwe.mitre.org/data/definitions/345.html">CWE-345: Insufficient Verification of Data Authenticity</a></li>
+<li><a href="https://github.com/trusteddomainproject/OpenDMARC">OpenDMARC repository</a></li>
+<li><a href="https://weitongli.com/">Weitong Li, Virginia Tech - researcher homepage</a></li>
+</ul>
+
+<footer>
+<p>Reported by <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech
+(<a href="mailto:weitongli@vt.edu">weitongli@vt.edu</a>).
+Reproduction environment and full evidence available to the vendor on request.
+CVSS is the researcher's own assessment.</p>
+</footer>
+
+</body>
+</html>

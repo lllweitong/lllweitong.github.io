@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>OpenDMARC always expands the SPF %{l} macro to &quot;postmaster&quot;, bypassing per-user SPF policy (OpenDMARC ≤ 1.4.2)</title>
+<style>
+:root { color-scheme: light dark; --fg:#111; --bg:#fff; --muted:#555; --rule:#ddd; --pre:#f5f5f5; --link:#14508c; }
+@media (prefers-color-scheme: dark) {
+  :root { --fg:#e4e4e4; --bg:#161616; --muted:#a0a0a0; --rule:#333; --pre:#1e1e1e; --link:#7fb2e5; }
+}
+body { max-width: 46rem; margin: 2.5rem auto; padding: 0 1.1rem 4rem; background: var(--bg); color: var(--fg);
+       font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+h1 { font-size: 1.35rem; line-height: 1.35; margin: 0 0 1rem; }
+h2 { font-size: 1.05rem; margin: 2rem 0 .6rem; }
+p, li { margin: .6rem 0; }
+a { color: var(--link); }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .87em; }
+pre { background: var(--pre); border: 1px solid var(--rule); padding: .75rem .85rem; overflow-x: auto;
+      font-size: .82rem; line-height: 1.45; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+table { border-collapse: collapse; width: 100%; font-size: .87rem; margin: .7rem 0; }
+th, td { border: 1px solid var(--rule); padding: .35rem .5rem; text-align: left; vertical-align: top; }
+.scroll { overflow-x: auto; }
+.hdr { font-size: .93rem; color: var(--muted); margin: 0 0 1.6rem; }
+.hdr b { color: var(--fg); font-weight: 600; }
+.lead { border-left: 3px solid var(--rule); padding-left: .85rem; margin: 0 0 1.6rem; }
+footer { margin-top: 3rem; padding-top: .8rem; border-top: 1px solid var(--rule);
+         color: var(--muted); font-size: .84rem; }
+</style>
+</head>
+<body>
+
+<h1>OpenDMARC always expands the SPF %{l} macro to "postmaster", bypassing per-user SPF policy (OpenDMARC ≤ 1.4.2)</h1>
+
+<p class="hdr">
+<b>Author:</b> <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech &lt;weitongli@vt.edu&gt;<br>
+<b>Date:</b> 2026-07-31<br>
+<b>Vendor:</b> <a href="http://www.trusteddomain.org/">The Trusted Domain Project</a><br>
+<b>Software:</b> <a href="https://github.com/trusteddomainproject/OpenDMARC">OpenDMARC (SPFSelfValidate)</a><br>
+<b>Affected version:</b> OpenDMARC 1.4.2, built from the upstream tarball <code>rel-opendmarc-1-4-2</code>. The finding was originally isolated on the Debian package <code>1.4.2-1+deb12u1</code> and re-confirmed against pristine upstream. Earlier 1.4.x and 1.3.x releases are expected to share the behaviour.<br>
+<b>Vulnerable component:</b> SPF macro expansion in <code>SPFSelfValidate</code> — the <code>%{l}</code> and <code>%{s}</code> local-part substitution<br>
+<b>Vulnerability type:</b> CWE-20 (Improper Input Validation) leading to CWE-290 (Authentication Bypass by Spoofing)<br>
+<b>Attack vector:</b> Remote, unauthenticated, but conditional: the victim domain must publish SPF using the <code>%{l}</code> macro.<br>
+<b>CVSS v3.1:</b> 5.9 (Medium) &mdash; <code>CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:H/A:N</code><br>
+<b>Status:</b> Reproduced on 2026-07-28 against the current release (run <code>20260728-120957</code>) with a scripted reproducer, negative controls, and a second independent implementation as the differential oracle. Confirmed over five or more independent runs with fresh random domain suffixes, using the authoritative server's query log as independent ground truth.
+</p>
+
+<p class="lead"><b>Impact.</b> Every sender is evaluated as postmaster, so per-local-part SPF deny entries never match and a forged local part can pass.</p>
+
+<h2>Description</h2>
+<p>Any domain that implements per-user SPF policy through <code>exists:%{l}...</code>, a standard technique described in RFC 7208 section 5.7, is bypassed on OpenDMARC. Every sender is treated as <code>postmaster</code>, so per-local-part deny entries never match and the mechanism resolves at <code>postmaster._spf</code>, or falls through to a trailing <code>+all</code> or <code>?all</code>. The result is SPF pass and therefore DMARC pass on a forged local part.</p>
+<p>The precondition — that the victim deploys <code>%{l}</code>-based SPF — is what keeps this below the unconditional findings in severity, and is reflected in the CVSS attack complexity.</p>
+<p>RFC 7208 section 7.3 defines the macro letters <code>l</code>, <code>s</code> and <code>o</code> as components of the local part of the <em>checked identity</em>. Sections 2.4 and 4.3 define the substitution of the literal string <code>postmaster</code> only for a null reverse path, <code>MAIL FROM:&lt;&gt;</code>.</p>
+<p>OpenDMARC's <code>SPFSelfValidate</code> always expands <code>%{l}</code> to <code>postmaster</code>, even for a non-null <code>MAIL FROM</code>. Every sender is evaluated as <code>postmaster</code>, so per-local-part policy never applies.</p>
+<p>Victim SPF <code>v=spf1 exists:%{l}._spf.%{d} -all</code>, envelope <code>MAIL FROM:&lt;alice@victim&gt;</code>, policy <code>p=reject</code>. The only variable is where the A record is published; the authoritative server's query log records the exact name each verifier asks for:</p>
+<div class="scroll">
+<table>
+<tr><th>A record published at</th><th>OpenDMARC queries</th><th>OpenDMARC result</th><th>Rspamd queries</th><th>Rspamd result</th></tr>
+<tr><td><code>alice._spf</code> (the correct expansion)</td><td><code>postmaster._spf</code> → NXDOMAIN</td><td>spf none → dmarc=fail (reject)</td><td><code>alice._spf</code> → match</td><td>spf pass → dmarc=pass</td></tr>
+<tr><td><code>postmaster._spf</code></td><td><code>postmaster._spf</code> → match</td><td><strong>spf pass → dmarc=pass — fail-open</strong></td><td><code>alice._spf</code> → NXDOMAIN</td><td>spf fail → dmarc=fail</td></tr>
+</table>
+</div>
+<p>Three controls isolate <code>%{l}</code> cleanly. The domain-macro form <code>exists:%{d}._spf.%{d}</code> passes on both, so only the local-part macro diverges. A null sender, <code>MAIL FROM:&lt;&gt;</code>, makes <em>both</em> query <code>postmaster._spf</code>, which proves OpenDMARC is wrongly applying the null-sender rule to non-null senders rather than failing to expand the macro at all. Varying the local part and setting a HELO domain different from the <code>MAIL FROM</code> domain leaves OpenDMARC still querying <code>postmaster._spf</code>, while <code>%{d}</code> correctly follows the <code>MAIL FROM</code> domain.</p>
+
+<h2>Proof of Concept</h2>
+<pre><code>victim.example.                 IN TXT "v=spf1 exists:%{l}._spf.%{d} -all"
+postmaster._spf.victim.example. IN A   203.0.113.9
+_dmarc.victim.example.          IN TXT "v=DMARC1; p=reject"
+# alice._spf.victim.example does not exist</code></pre>
+<p>Send from <code>203.0.113.9</code> with <code>MAIL FROM:&lt;alice@victim.example&gt;</code> and <code>From: alice@victim.example</code>. Required: <code>%{l}</code> expands to <code>alice</code>, the query for <code>alice._spf.victim.example</code> returns NXDOMAIN, <code>-all</code> applies, SPF fails and DMARC fails. Observed on OpenDMARC: the query goes to <code>postmaster._spf.victim.example</code>, matches, SPF passes and DMARC passes.</p>
+
+<h2>Mitigation</h2>
+<p>Expand <code>%{l}</code> and <code>%{s}</code> from the local part of the checked identity, and substitute <code>postmaster</code> only when the reverse path is null, per RFC 7208 sections 7.3, 2.4 and 4.3. The defect is in the local-part wiring of OpenDMARC's SPF engine.</p>
+
+<h2>Notes</h2>
+<p>This corrects the root cause recorded in the earlier entry <code>opendmarc-local-part-macro-superseded</code>. That entry reported that <code>SPFSelfValidate</code> “does not expand <code>%{l}</code>”, inferred from a setup whose A record sat at the real local part. The true behaviour is the always-<code>postmaster</code> substitution, which explains that entry's observed failure <em>and</em> reveals the fail-open direction it missed. It should be treated as superseded for the mechanism.</p>
+<p>A secondary, interoperability-only observation on the Rspamd side: it does not URL-encode macro-special characters in the local part, so <code>a+b</code> queries <code>a._spf</code> and <code>a=b</code> and a non-ASCII local part abort the query. All of these resolve to SPF <code>fail</code>, so there is no fail-open there.</p>
+
+<h2>References</h2>
+<ul>
+<li><a href="https://www.rfc-editor.org/rfc/rfc7208#section-7.3">RFC 7208 section 7.3 - Macro Definitions</a></li>
+<li><a href="https://www.rfc-editor.org/rfc/rfc7208#section-4.3">RFC 7208 section 4.3 - Initial Processing (the postmaster substitution)</a></li>
+<li><a href="https://www.rfc-editor.org/rfc/rfc7208#section-5.7">RFC 7208 section 5.7 - exists</a></li>
+<li><a href="https://cwe.mitre.org/data/definitions/20.html">CWE-20: Improper Input Validation</a></li>
+<li><a href="https://github.com/trusteddomainproject/OpenDMARC">OpenDMARC repository</a></li>
+<li><a href="https://weitongli.com/">Weitong Li, Virginia Tech - researcher homepage</a></li>
+</ul>
+
+<footer>
+<p>Reported by <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech
+(<a href="mailto:weitongli@vt.edu">weitongli@vt.edu</a>).
+Reproduction environment and full evidence available to the vendor on request.
+CVSS is the researcher's own assessment.</p>
+</footer>
+
+</body>
+</html>

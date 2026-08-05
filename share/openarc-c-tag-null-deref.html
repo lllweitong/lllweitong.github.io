@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>OpenARC NULL-pointer dereference in arc_name_to_code() via an ARC-Message-Signature c= tag without a body canonicalisation (OpenARC (master))</title>
+<style>
+:root { color-scheme: light dark; --fg:#111; --bg:#fff; --muted:#555; --rule:#ddd; --pre:#f5f5f5; --link:#14508c; }
+@media (prefers-color-scheme: dark) {
+  :root { --fg:#e4e4e4; --bg:#161616; --muted:#a0a0a0; --rule:#333; --pre:#1e1e1e; --link:#7fb2e5; }
+}
+body { max-width: 46rem; margin: 2.5rem auto; padding: 0 1.1rem 4rem; background: var(--bg); color: var(--fg);
+       font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+h1 { font-size: 1.35rem; line-height: 1.35; margin: 0 0 1rem; }
+h2 { font-size: 1.05rem; margin: 2rem 0 .6rem; }
+p, li { margin: .6rem 0; }
+a { color: var(--link); }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .87em; }
+pre { background: var(--pre); border: 1px solid var(--rule); padding: .75rem .85rem; overflow-x: auto;
+      font-size: .82rem; line-height: 1.45; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+table { border-collapse: collapse; width: 100%; font-size: .87rem; margin: .7rem 0; }
+th, td { border: 1px solid var(--rule); padding: .35rem .5rem; text-align: left; vertical-align: top; }
+.scroll { overflow-x: auto; }
+.hdr { font-size: .93rem; color: var(--muted); margin: 0 0 1.6rem; }
+.hdr b { color: var(--fg); font-weight: 600; }
+.lead { border-left: 3px solid var(--rule); padding-left: .85rem; margin: 0 0 1.6rem; }
+footer { margin-top: 3rem; padding-top: .8rem; border-top: 1px solid var(--rule);
+         color: var(--muted); font-size: .84rem; }
+</style>
+</head>
+<body>
+
+<h1>OpenARC NULL-pointer dereference in arc_name_to_code() via an ARC-Message-Signature c= tag without a body canonicalisation (OpenARC (master))</h1>
+
+<p class="hdr">
+<b>Author:</b> <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech &lt;weitongli@vt.edu&gt;<br>
+<b>Date:</b> 2026-07-31<br>
+<b>Vendor:</b> <a href="http://www.trusteddomain.org/">The Trusted Domain Project</a><br>
+<b>Software:</b> <a href="https://github.com/trusteddomainproject/OpenARC">OpenARC (libopenarc)</a><br>
+<b>Affected version:</b> Current upstream <code>master</code>.<br>
+<b>Vulnerable component:</b> <code>libopenarc/arc-canon.c</code>, <code>arc_parse_canon_t()</code>; crash in <code>libopenarc/arc-tables.c</code>, <code>arc_name_to_code()</code> line 219, reached from <code>arc_eoh_verify()</code><br>
+<b>Vulnerability type:</b> CWE-476 (NULL Pointer Dereference)<br>
+<b>Attack vector:</b> Remote, unauthenticated. One forwarded e-mail carrying an ARC chain.<br>
+<b>CVSS v3.1:</b> 7.5 (High) &mdash; <code>CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H</code><br>
+<b>Status:</b> AddressSanitizer-confirmed; the proposed fix was applied, rebuilt, and the real crashing input then ran clean.
+</p>
+
+<p class="lead"><b>Impact.</b> A spec-valid 'c=relaxed' on an ARC-Message-Signature crashes the verifier, so the trigger fires on legitimate forwarded mail as well as on attacks.</p>
+
+<h2>Description</h2>
+<p>Remote crash of the ARC verifier, and therefore a denial of service against mail processing on any deployment that verifies ARC chains. What raises the practical severity is that the trigger is <em>specification-valid</em>: <code>c=relaxed</code> without an explicit body canonicalisation is a legal ARC-Message-Signature, so this can fire on ordinary forwarded mail from a conforming signer, not only on a deliberately crafted message. ARC is specifically the mechanism that carries authentication results across forwarding hops, so the affected input arrives from third parties by design.</p>
+<p><code>arc_parse_canon_t()</code> splits the <code>c=</code> tag value on <code>/</code> into a header canonicalisation name and a body canonicalisation name, and passes each to <code>arc_name_to_code()</code>. When <code>c=</code> carries only the header form — for example <code>c=relaxed</code>, with the body canonicalisation defaulting to <code>simple</code> — the second <code>strtok_r()</code> returns NULL and <code>arc_name_to_code()</code> dereferences it inside <code>strcasecmp()</code>.</p>
+<p>RFC 6376 section 3.5, which RFC 8617 inherits, explicitly allows the body canonicalisation to be omitted. The crashing signature is therefore well-formed: a verifier is required to apply the default, not to fault.</p>
+<pre><code>token = strtok_r(tag, "/", &amp;last);                  /* header canonicalisation */
+code  = arc_name_to_code(canonicalizations, token);
+...
+token = strtok_r(NULL, "/", &amp;last);                 /* NULL when c= has no '/' */
+code  = arc_name_to_code(canonicalizations, token);  /* token may be NULL */</code></pre>
+<p>and in <code>arc-tables.c</code>:</p>
+<pre><code>if (strcasecmp(tbl[c].tbl_name, name) == 0)   /* strcasecmp(valid, NULL) -&gt; SEGV */</code></pre>
+<pre><code>ERROR: AddressSanitizer: SEGV on unknown address 0x000000000000
+    #0 strcasecmp
+    #1 arc_name_to_code arc-tables.c:219
+    #2 arc_parse_canon_t
+    #3 arc_eoh_verify</code></pre>
+
+<h2>Proof of Concept</h2>
+<p>A complete ARC instance — ARC-Seal, ARC-Message-Signature and ARC-Authentication-Results, all at <code>i=1</code> — where the ARC-Message-Signature carries <code>c=relaxed</code> with no body canonicalisation:</p>
+<pre><code>ARC-Seal: i=1; a=rsa-sha256; t=...; cv=none; d=fwd.example; s=s1; b=...
+ARC-Message-Signature: i=1; a=rsa-sha256; c=relaxed; d=fwd.example; s=s1;
+ h=from:to:subject; bh=...; b=...
+ARC-Authentication-Results: i=1; fwd.example; spf=pass; dkim=pass; dmarc=pass
+From: a@orig.example
+To: b@dest.example
+Subject: test
+
+body</code></pre>
+<p>A bare ARC-Message-Signature on its own does not reach the canonicalisation parse in <code>arc_eoh_verify()</code>; the full instance is required. Build <code>libopenarc</code> with AddressSanitizer, link the verification harness (<code>arc_message(VERIFY)</code>, <code>arc_header_field()</code>, <code>arc_eoh()</code>, <code>arc_body()</code>, <code>arc_eom()</code>) and feed it the message.</p>
+
+<h2>Mitigation</h2>
+<p>A defensive NULL guard in <code>arc_name_to_code()</code>, verified by rebuild against the real crashing input:</p>
+<pre><code>-                if (strcasecmp(tbl[c].tbl_name, name) == 0)
++                if (name != NULL &amp;&amp; strcasecmp(tbl[c].tbl_name, name) == 0)</code></pre>
+<p>The better fix is in <code>arc_parse_canon_t()</code>: treat a missing body-canonicalisation token as the specified default <code>simple</code> rather than passing NULL down, so that a legal signature is processed correctly instead of merely not crashing.</p>
+
+<h2>Notes</h2>
+<p>Found in the ARC (forwarding) code path, which appears less exercised than the DKIM path; <code>openarc-canon-header-leak</code>, a per-message memory leak, sits in the same path and was found in the same session.</p>
+
+<h2>References</h2>
+<ul>
+<li><a href="https://www.rfc-editor.org/rfc/rfc8617">RFC 8617 - The Authenticated Received Chain (ARC) Protocol</a></li>
+<li><a href="https://www.rfc-editor.org/rfc/rfc6376#section-3.5">RFC 6376 section 3.5 - the c= (canonicalisation) tag and its default</a></li>
+<li><a href="https://cwe.mitre.org/data/definitions/476.html">CWE-476: NULL Pointer Dereference</a></li>
+<li><a href="https://github.com/trusteddomainproject/OpenARC">OpenARC repository</a></li>
+<li><a href="https://weitongli.com/">Weitong Li, Virginia Tech - researcher homepage</a></li>
+</ul>
+
+<footer>
+<p>Reported by <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech
+(<a href="mailto:weitongli@vt.edu">weitongli@vt.edu</a>).
+Reproduction environment and full evidence available to the vendor on request.
+CVSS is the researcher's own assessment.</p>
+</footer>
+
+</body>
+</html>

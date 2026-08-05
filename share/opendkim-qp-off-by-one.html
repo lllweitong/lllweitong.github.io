@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>OpenDKIM off-by-one in dkim_qp_decode() leaves an unterminated buffer, causing an out-of-bounds read in dkim_sig_domainok() (OpenDKIM ≤ 2.11.0)</title>
+<style>
+:root { color-scheme: light dark; --fg:#111; --bg:#fff; --muted:#555; --rule:#ddd; --pre:#f5f5f5; --link:#14508c; }
+@media (prefers-color-scheme: dark) {
+  :root { --fg:#e4e4e4; --bg:#161616; --muted:#a0a0a0; --rule:#333; --pre:#1e1e1e; --link:#7fb2e5; }
+}
+body { max-width: 46rem; margin: 2.5rem auto; padding: 0 1.1rem 4rem; background: var(--bg); color: var(--fg);
+       font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+h1 { font-size: 1.35rem; line-height: 1.35; margin: 0 0 1rem; }
+h2 { font-size: 1.05rem; margin: 2rem 0 .6rem; }
+p, li { margin: .6rem 0; }
+a { color: var(--link); }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .87em; }
+pre { background: var(--pre); border: 1px solid var(--rule); padding: .75rem .85rem; overflow-x: auto;
+      font-size: .82rem; line-height: 1.45; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+table { border-collapse: collapse; width: 100%; font-size: .87rem; margin: .7rem 0; }
+th, td { border: 1px solid var(--rule); padding: .35rem .5rem; text-align: left; vertical-align: top; }
+.scroll { overflow-x: auto; }
+.hdr { font-size: .93rem; color: var(--muted); margin: 0 0 1.6rem; }
+.hdr b { color: var(--fg); font-weight: 600; }
+.lead { border-left: 3px solid var(--rule); padding-left: .85rem; margin: 0 0 1.6rem; }
+footer { margin-top: 3rem; padding-top: .8rem; border-top: 1px solid var(--rule);
+         color: var(--muted); font-size: .84rem; }
+</style>
+</head>
+<body>
+
+<h1>OpenDKIM off-by-one in dkim_qp_decode() leaves an unterminated buffer, causing an out-of-bounds read in dkim_sig_domainok() (OpenDKIM ≤ 2.11.0)</h1>
+
+<p class="hdr">
+<b>Author:</b> <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech &lt;weitongli@vt.edu&gt;<br>
+<b>Date:</b> 2026-07-31<br>
+<b>Vendor:</b> <a href="http://www.trusteddomain.org/">The Trusted Domain Project</a><br>
+<b>Software:</b> <a href="http://www.opendkim.org/">OpenDKIM (libopendkim)</a><br>
+<b>Affected version:</b> OpenDKIM 2.11.0 (<code>2.11.0~beta2-9.1+b1</code>) and current upstream <code>master</code>.<br>
+<b>Vulnerable component:</b> <code>libopendkim/util.c</code>, <code>dkim_qp_decode()</code> line 322; manifests in <code>libopendkim/dkim.c</code>, <code>dkim_sig_domainok()</code> lines 1604 and 1611<br>
+<b>Vulnerability type:</b> CWE-193 (Off-by-one Error) leading to CWE-125 (Out-of-bounds Read)<br>
+<b>Attack vector:</b> Remote, unauthenticated. One inbound e-mail carrying a DKIM-Signature header with an <code>i=</code> tag.<br>
+<b>CVSS v3.1:</b> 8.2 (High) &mdash; <code>CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:H</code><br>
+<b>Status:</b> AddressSanitizer-confirmed; the proposed fix was applied, libopendkim rebuilt, and the crashing input then ran clean.
+</p>
+
+<p class="lead"><b>Impact.</b> A quoted-printable i= tag that fills the destination buffer destroys its NUL terminator, and the caller then runs strchr() past the end of the stack array.</p>
+
+<h2>Description</h2>
+<p>An out-of-bounds read of adjacent stack memory on every inbound signed message whose <code>i=</code> tag is long enough. The observed effect is a crash of the verifying process under a sanitizer or a hardened allocator, which for a milter means loss of mail processing. On an ordinary build the read usually returns adjacent stack bytes, which are then compared against the signing domain in <code>strcasecmp()</code>; that is undefined behaviour and a potential, though narrow, information-disclosure oracle rather than a demonstrated leak.</p>
+<p><code>dkim_qp_decode(in, out, outlen)</code> computes <code>end = out + outlen</code> and guards every output write with <code>if (q &lt;= end)</code>. The inclusive comparison permits a write to <code>out[outlen]</code> — precisely the byte the caller reserved for the NUL terminator.</p>
+<p><code>dkim_sig_domainok()</code> calls it with <code>outlen = sizeof addr - 1</code> over a <code>memset</code>-zeroed stack array, then treats the result as a C string. A quoted-printable <code>i=</code> value that decodes to fill the buffer overwrites the terminator, and the following <code>strchr()</code> and <code>strcasecmp()</code> read past the end of the array.</p>
+<p>The caller, in <code>dkim.c</code>:</p>
+<pre><code>u_char addr[MAXADDRESS + 1];
+memset(addr, '\0', sizeof addr);
+...
+dkim_qp_decode(i, addr, sizeof addr - 1);   /* outlen = MAXADDRESS */
+at = strchr((char *) addr, '@');            /* dkim.c:1604 - out-of-bounds read */
+...
+strcasecmp(at + 1, d);                      /* dkim.c:1611 */</code></pre>
+<p>With <code>outlen = sizeof addr - 1</code>, <code>end</code> points at <code>&amp;addr[MAXADDRESS]</code>, which is the last valid byte of the array and the byte holding the terminator. The <code>q &lt;= end</code> test therefore lets the decoder consume it. Every following string operation on <code>addr</code> then walks off the end of the stack object.</p>
+<pre><code>==ERROR== AddressSanitizer: stack-buffer-overflow
+READ of size 259 at 0x...
+    #0 __interceptor_strchr
+    #1 dkim_sig_domainok dkim.c:1604</code></pre>
+<p>The same unterminated-output hazard applies to the other string-consuming callers of <code>dkim_qp_decode()</code> in <code>dkim.c</code> (lines 7278, 7298 and 7367), which were not individually driven to a crash but share the defect.</p>
+
+<h2>Proof of Concept</h2>
+<p>A message whose DKIM-Signature carries an <code>i=</code> tag that is a long quoted-printable value decoding to at least <code>MAXADDRESS</code> bytes. The fuzzer-minimised input has the shape:</p>
+<pre><code>From: a@&gt;&gt;&gt;&gt;&gt;:0rs000
+DKIM-Signature: v=1; a=rsa-sha256; d=example.com; s=s1;
+ i=&lt;long quoted-printable value decoding to &gt;= MAXADDRESS bytes&gt;;
+ h=from; bh=...; b=...
+
+body</code></pre>
+<pre><code># libopendkim built with -fsanitize=address, verification harness linked
+./fuzz_odkim_verify crashes_dkv/dkv-crash-1972e8dd...
+==ERROR== AddressSanitizer: stack-buffer-overflow READ of size 259
+          ... __interceptor_strchr &lt;- dkim_sig_domainok</code></pre>
+<p>As with the <code>h=</code> tag write the signature need not verify. The AUID (<code>i=</code>) is decoded during <code>dkim_eoh()</code>, before the cryptographic check.</p>
+
+<h2>Mitigation</h2>
+<p>Change the bounds check from inclusive to exclusive, in all eight places it appears in <code>dkim_qp_decode()</code>:</p>
+<pre><code>-                        if (q &lt;= end)
++                        if (q &lt; end)</code></pre>
+<p>This keeps one byte free for the terminator. As a belt-and-braces measure, write <code>*q = '\0'</code> before returning. The change was applied, <code>libopendkim</code> rebuilt, and the crashing input re-run: clean, with no sanitizer report.</p>
+
+<h2>Notes</h2>
+<p>Fixing this defect alone is not sufficient. Re-running the harness against a patched library surfaced <code>opendkim-qp-truncated-escape</code>, an independent input-side over-run in the same function, and <code>opendkim-h-tag-oob-write</code> in a different function. All three should be fixed together.</p>
+
+<h2>References</h2>
+<ul>
+<li><a href="https://www.rfc-editor.org/rfc/rfc6376#section-3.5">RFC 6376 section 3.5 - the i= (AUID) tag</a></li>
+<li><a href="https://cwe.mitre.org/data/definitions/193.html">CWE-193: Off-by-one Error</a></li>
+<li><a href="https://cwe.mitre.org/data/definitions/125.html">CWE-125: Out-of-bounds Read</a></li>
+<li><a href="http://www.opendkim.org/">OpenDKIM project</a></li>
+<li><a href="https://weitongli.com/">Weitong Li, Virginia Tech - researcher homepage</a></li>
+</ul>
+
+<footer>
+<p>Reported by <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech
+(<a href="mailto:weitongli@vt.edu">weitongli@vt.edu</a>).
+Reproduction environment and full evidence available to the vendor on request.
+CVSS is the researcher's own assessment.</p>
+</footer>
+
+</body>
+</html>

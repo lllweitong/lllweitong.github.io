@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Rspamd and dkimpy do not enforce the DKIM key record&#x27;s t=s strict flag, so a subdomain AUID is accepted against a key locked to its exact domain (Rspamd &lt;= 4.1.2 and dkimpy ≤ 1.1.8)</title>
+<style>
+:root { color-scheme: light dark; --fg:#111; --bg:#fff; --muted:#555; --rule:#ddd; --pre:#f5f5f5; --link:#14508c; }
+@media (prefers-color-scheme: dark) {
+  :root { --fg:#e4e4e4; --bg:#161616; --muted:#a0a0a0; --rule:#333; --pre:#1e1e1e; --link:#7fb2e5; }
+}
+body { max-width: 46rem; margin: 2.5rem auto; padding: 0 1.1rem 4rem; background: var(--bg); color: var(--fg);
+       font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+h1 { font-size: 1.35rem; line-height: 1.35; margin: 0 0 1rem; }
+h2 { font-size: 1.05rem; margin: 2rem 0 .6rem; }
+p, li { margin: .6rem 0; }
+a { color: var(--link); }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .87em; }
+pre { background: var(--pre); border: 1px solid var(--rule); padding: .75rem .85rem; overflow-x: auto;
+      font-size: .82rem; line-height: 1.45; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+table { border-collapse: collapse; width: 100%; font-size: .87rem; margin: .7rem 0; }
+th, td { border: 1px solid var(--rule); padding: .35rem .5rem; text-align: left; vertical-align: top; }
+.scroll { overflow-x: auto; }
+.hdr { font-size: .93rem; color: var(--muted); margin: 0 0 1.6rem; }
+.hdr b { color: var(--fg); font-weight: 600; }
+.lead { border-left: 3px solid var(--rule); padding-left: .85rem; margin: 0 0 1.6rem; }
+footer { margin-top: 3rem; padding-top: .8rem; border-top: 1px solid var(--rule);
+         color: var(--muted); font-size: .84rem; }
+</style>
+</head>
+<body>
+
+<h1>Rspamd and dkimpy do not enforce the DKIM key record's t=s strict flag, so a subdomain AUID is accepted against a key locked to its exact domain (Rspamd &lt;= 4.1.2 and dkimpy ≤ 1.1.8)</h1>
+
+<p class="hdr">
+<b>Author:</b> <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech &lt;weitongli@vt.edu&gt;<br>
+<b>Date:</b> 2026-07-31<br>
+<b>Vendor:</b> <a href="https://rspamd.com/">Rspamd project (Vsevolod Stakhov) and the dkimpy maintainers (Scott Kitterman et al.)</a><br>
+<b>Software:</b> <a href="https://github.com/rspamd/rspamd">Rspamd and dkimpy</a><br>
+<b>Affected version:</b> Rspamd 4.1.2. Originally isolated on 3.10.2 and re-confirmed on 4.1.2 on 2026-07-28. dkimpy 1.1.8. OpenDKIM 2.11.0 enforces the flag correctly.<br>
+<b>Vulnerable component:</b> DKIM public-key record handling — the <code>s</code> (strict) value of the <code>t=</code> flags tag in RFC 6376 section 3.6.1<br>
+<b>Vulnerability type:</b> CWE-347 (Improper Verification of Cryptographic Signature) / CWE-20 (Improper Input Validation)<br>
+<b>Attack vector:</b> Remote. The victim key record must publish <code>t=s</code>, and the attacker must be able to produce a signature under that key carrying a subdomain AUID.<br>
+<b>CVSS v3.1:</b> 3.7 (Low) &mdash; <code>CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:L/A:N</code><br>
+<b>Status:</b> Reproduced on 2026-07-28 against the current release (run <code>20260728-120957</code>) with a scripted reproducer, negative controls, and a second independent implementation as the differential oracle. Three deterministic repetitions with both isolating controls, and dkimpy cross-checked as a second non-enforcing implementation.
+</p>
+
+<p class="lead"><b>Impact.</b> With t=s published, a signature carrying i=@sub.d must fail; Rspamd returns R_DKIM_ALLOW and dkimpy passes, while OpenDKIM alone enforces the flag.</p>
+
+<h2>Description</h2>
+<p>A domain sets <code>t=s</code> to lock a key to its exact domain, for instance to stop a delegated sub-signer, a departmental system or a tenant holding the key from claiming <code>i=@sub.d</code> as an authenticated identity. On Rspamd and dkimpy that lock has no effect, and the subdomain AUID is reported as authenticated.</p>
+<p>The exposure is narrow and is described as such. The AUID is chosen by whoever signs, and <code>t=s</code> is rarely published, so few deployments are in a position to be affected. The finding's value is that it is a clean MUST violation shared by two independent implementations, and that it removes the only mechanism RFC 6376 provides for a key owner to forbid subdomain AUIDs on a key they have delegated.</p>
+<p>RFC 6376 section 3.6.1 defines the <code>s</code> flag of the key record's <code>t=</code> tag: <em>“Any DKIM-Signature header fields using the <code>i=</code> tag MUST have the same domain value on the right-hand side of the <code>@</code> in the <code>i=</code> tag and the value of the <code>d=</code> tag. That is, the <code>i=</code> domain MUST NOT be a subdomain of <code>d=</code>.”</em> The flag narrows the section 3.5 default, under which a subdomain AUID is perfectly legal, to exact equality.</p>
+<p>Rspamd and dkimpy both ignore the flag. A signature carrying a subdomain AUID against a key published with <code>t=s</code> is accepted by both, where OpenDKIM correctly fails it. Here OpenDKIM is the lone enforcer and two implementations independently miss the same MUST.</p>
+<p>The signature is valid throughout, and the <code>i=</code> tag is inside the signed tag set, so it is covered by <code>b=</code> and cannot have been added after signing. Only the key record's <code>t=</code> tag and the AUID form vary:</p>
+<div class="scroll">
+<table>
+<tr><th>Key record</th><th>Signature <code>i=</code></th><th>OpenDKIM</th><th>Rspamd</th><th>dkimpy</th><th>Required</th></tr>
+<tr><td><code>t=s</code></td><td><code>@sub.d</code> (subdomain)</td><td>fail</td><td><strong><code>R_DKIM_ALLOW</code></strong></td><td><strong>pass</strong></td><td>fail</td></tr>
+<tr><td><code>t=s:y</code> (list form)</td><td><code>@sub.d</code></td><td>fail</td><td><strong>pass</strong></td><td><strong>pass</strong></td><td>fail</td></tr>
+<tr><td><em>(no <code>t=</code>, control)</em></td><td><code>@sub.d</code></td><td>pass</td><td>pass</td><td>pass</td><td>pass</td></tr>
+<tr><td><code>t=s</code> (control)</td><td><code>@d</code> (exact)</td><td>pass</td><td>pass</td><td>pass</td><td>pass</td></tr>
+</table>
+</div>
+<p>The two control rows isolate the flag completely. With <code>t=</code> absent, the subdomain AUID is legal and all three implementations correctly pass it. With <code>t=s</code> present but the AUID exactly equal to <code>d=</code>, all three correctly pass again. OpenDKIM's failure therefore arises only from the combination of the flag and the subdomain form, which is exactly the case section 3.6.1 converts from legal to invalid. Rspamd and dkimpy return the same verdict in all four rows, so neither reads the flag.</p>
+<p>The <code>t=s:y</code> row shows that the omission is not a parsing artefact of the list form. Both non-enforcing implementations miss the flag whether it stands alone or appears alongside another flag.</p>
+
+<h2>Proof of Concept</h2>
+<p>Publish a key record with the strict flag set:</p>
+<pre><code>sel._domainkey.signer.example.  IN TXT "v=DKIM1; k=rsa; t=s; p=&lt;base64 RSA public key&gt;"</code></pre>
+<p>Sign the message with the matching private key, with the AUID set to a subdomain of the signing domain and included in the signed tag set so that it is covered by <code>b=</code>:</p>
+<pre><code>DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=signer.example; s=sel;
+    i=user@sub.signer.example; h=from:to:subject:date; bh=&lt;body hash&gt;; b=&lt;signature&gt;</code></pre>
+<p>Required under RFC 6376 section 3.6.1: with <code>t=s</code> the AUID domain must equal <code>d=</code> and must not be a subdomain of it, so the signature is invalid. Observed on Rspamd: <code>R_DKIM_ALLOW</code>. Observed on dkimpy: verification returns true. Observed on OpenDKIM: failure.</p>
+<p>Two controls complete the reproduction. Removing <code>t=s</code> from the record makes all three pass, which is correct under the section 3.5 default. Keeping <code>t=s</code> and setting <code>i=user@signer.example</code> also makes all three pass. The divergence appears only when both conditions hold at once.</p>
+
+<h2>Mitigation</h2>
+<p>Parse the key record's <code>t=</code> flags, including the list form, and when the <code>s</code> flag is present require the AUID domain to equal <code>d=</code> exactly rather than merely to lie within its subtree. Unknown flags in the list must continue to be ignored, per section 3.6.1, without that tolerance being extended to the flags that are recognised.</p>
+
+<h2>Notes</h2>
+<p>Distinct from <code>rspamd-auid-subtree-unchecked</code>, which is the section 3.5 default AUID constraint that a parent, sibling or unrelated AUID domain is invalid. This entry is the separate section 3.6.1 strict flag, which additionally forbids the subdomain form that the default constraint records as a correct pass. That baseline is exactly what <code>t=s</code> is supposed to flip.</p>
+<p>An earlier laboratory run recorded <code>t=s</code> as a consensus with no divergence. That run exercised only the benign direction, <code>t=s</code> with an AUID equal to <code>d=</code>, and never the failing direction with a subdomain AUID, so the two results do not contradict one another. The earlier conclusion was incomplete rather than wrong.</p>
+<p>Confirmation against upstream Rspamd and upstream dkimpy remains an open step, and the disclosure priority is correspondingly low: the flag is obscure, though the MUST is unambiguous.</p>
+
+<h2>References</h2>
+<ul>
+<li><a href="https://www.rfc-editor.org/rfc/rfc6376#section-3.6.1">RFC 6376 section 3.6.1 - Textual Representation (the t= flags tag and the s flag)</a></li>
+<li><a href="https://www.rfc-editor.org/rfc/rfc6376#section-3.5">RFC 6376 section 3.5 - The DKIM-Signature Header Field (the i= tag default)</a></li>
+<li><a href="https://cwe.mitre.org/data/definitions/347.html">CWE-347: Improper Verification of Cryptographic Signature</a></li>
+<li><a href="https://cwe.mitre.org/data/definitions/20.html">CWE-20: Improper Input Validation</a></li>
+<li><a href="https://rspamd.com/">Rspamd</a></li>
+<li><a href="https://pypi.org/project/dkimpy/">dkimpy on PyPI</a></li>
+<li><a href="https://weitongli.com/">Weitong Li, Virginia Tech - researcher homepage</a></li>
+</ul>
+
+<footer>
+<p>Reported by <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech
+(<a href="mailto:weitongli@vt.edu">weitongli@vt.edu</a>).
+Reproduction environment and full evidence available to the vendor on request.
+CVSS is the researcher's own assessment.</p>
+</footer>
+
+</body>
+</html>

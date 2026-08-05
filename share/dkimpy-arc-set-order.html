@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>dkimpy rejects a valid ARC chain whose ARC-Set headers are serialised out of i= order, alongside a test-rig baseline correction (dkimpy ≤ 1.1.8)</title>
+<style>
+:root { color-scheme: light dark; --fg:#111; --bg:#fff; --muted:#555; --rule:#ddd; --pre:#f5f5f5; --link:#14508c; }
+@media (prefers-color-scheme: dark) {
+  :root { --fg:#e4e4e4; --bg:#161616; --muted:#a0a0a0; --rule:#333; --pre:#1e1e1e; --link:#7fb2e5; }
+}
+body { max-width: 46rem; margin: 2.5rem auto; padding: 0 1.1rem 4rem; background: var(--bg); color: var(--fg);
+       font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+h1 { font-size: 1.35rem; line-height: 1.35; margin: 0 0 1rem; }
+h2 { font-size: 1.05rem; margin: 2rem 0 .6rem; }
+p, li { margin: .6rem 0; }
+a { color: var(--link); }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .87em; }
+pre { background: var(--pre); border: 1px solid var(--rule); padding: .75rem .85rem; overflow-x: auto;
+      font-size: .82rem; line-height: 1.45; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+table { border-collapse: collapse; width: 100%; font-size: .87rem; margin: .7rem 0; }
+th, td { border: 1px solid var(--rule); padding: .35rem .5rem; text-align: left; vertical-align: top; }
+.scroll { overflow-x: auto; }
+.hdr { font-size: .93rem; color: var(--muted); margin: 0 0 1.6rem; }
+.hdr b { color: var(--fg); font-weight: 600; }
+.lead { border-left: 3px solid var(--rule); padding-left: .85rem; margin: 0 0 1.6rem; }
+footer { margin-top: 3rem; padding-top: .8rem; border-top: 1px solid var(--rule);
+         color: var(--muted); font-size: .84rem; }
+</style>
+</head>
+<body>
+
+<h1>dkimpy rejects a valid ARC chain whose ARC-Set headers are serialised out of i= order, alongside a test-rig baseline correction (dkimpy ≤ 1.1.8)</h1>
+
+<p class="hdr">
+<b>Author:</b> <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech &lt;weitongli@vt.edu&gt;<br>
+<b>Date:</b> 2026-07-31<br>
+<b>Vendor:</b> <a href="https://launchpad.net/dkimpy">The dkimpy maintainers</a><br>
+<b>Software:</b> <a href="https://pypi.org/project/dkimpy/">dkimpy (arc_verify)</a><br>
+<b>Affected version:</b> dkimpy 1.1.8. The differential peer is Rspamd 4.1.2. Originally isolated on 3.10.2 and re-confirmed on 4.1.2 on 2026-07-28.<br>
+<b>Vulnerable component:</b> ARC chain validation — <code>ARC.verify_instance</code> and the header selection performed by <code>verify_sig</code> (RFC 8617 section 5.1.1)<br>
+<b>Vulnerability type:</b> CWE-436 (Interpretation Conflict)<br>
+<b>Attack vector:</b> Not a spoofing vector. The false rejection is triggered by a hop that re-serialises the ARC sets in a different physical order; the direction is denial of validation.<br>
+<b>CVSS v3.1:</b> 3.7 (Low) &mdash; <code>CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:N/A:L</code><br>
+<b>Status:</b> Re-baselined and confirmed on 2026-06-15 under the corrected rig described below. Of 28 mutations, 27 reach Rspamd and dkimpy consensus and the <code>cv=</code> latch holds on both; one case diverges. Every ARC result taken before the rig correction is void.
+</p>
+
+<p class="lead"><b>Impact.</b> Published for completeness and not submitted as a vendor vulnerability: the headline deliverable is a methodology correction that invalidated earlier ARC results, and the one genuine divergence is dkimpy-side and fails closed.</p>
+
+<h2>Description</h2>
+<p>Denial of validation on the dkimpy side only, and conditional on a hop that re-serialises ARC sets out of <code>i=</code> order. A forwarding path whose chain would otherwise have been preserved loses its ARC pass, which is the specific outcome ARC exists to prevent.</p>
+<p>There is no spoofing impact. The direction is fail-closed throughout: a misordered or mismatched chain is rejected, never accepted, and the reorder-plus-tamper controls confirm that no additional acceptance is introduced. This is the reason the entry carries a Low assessment and is not put forward for submission.</p>
+<p>The larger practical consequence is to the laboratory rather than to any deployment. Until the rig correction, no ARC result produced here was trustworthy, which is why the correction and not the divergence is the headline.</p>
+<p><strong>This entry is published for completeness and is deliberately not submitted as a vendor vulnerability.</strong> Its headline deliverable is a test-rig methodology correction, not a bug: two rig defects were silently invalidating the laboratory's entire ARC baseline. The one genuine divergence that survived the correction is dkimpy-side and fails <em>closed</em>, because a misordered chain is rejected rather than accepted, so it is not a spoofing primitive.</p>
+<p>The divergence itself is real. RFC 8617 section 5.1.1 defines the ARC-Seal hash input as the ARC-Set header values supplied in increasing instance order starting at 1, that is, an order defined by <code>i=</code> and not by the physical order of the headers on the wire. A validator must therefore reconstruct the chain by <code>i=</code>. dkimpy's <code>ARC.verify_instance</code> builds <code>as_include_headers</code> correctly, but <code>verify_sig</code> then re-selects the headers from the message by tail-popping in wire order, so a re-serialised chain feeds a different instance into the hash than the <code>i=</code>-sorted logic intends, and the seal fails to validate.</p>
+<p><strong>The rig correction, which is the substantive part of this entry.</strong> Two independent defects were found in the ARC test rig, and each had been manufacturing results.</p>
+<p>The first was key caching. The rig rotated freshly generated signing keys under <em>stable</em> selectors between runs, so the laboratory DNS and the verifier held the previous public key for a selector while a newly generated seal was presented against it. The resulting <code>ARC_REJECT</code> was a key mismatch and was misread as the chain logic rejecting the chain. The fix is process-unique selectors, never reused across key generations, together with 2048-bit keys, the 1024-bit keys having collided with cached entries or fallen below a verifier minimum in some arms.</p>
+<p>The second was a silent signing failure. dkimpy's <code>arc_sign</code> returns an empty list for any instance above 1 unless that hop's <code>Authentication-Results</code> header carries an <code>arc=&lt;result&gt;</code> stamp. The multi-hop builder therefore produced chains containing only an <code>i=1</code> set, so every mutation aimed at instances 2 and 3 was a no-op and reported a false consensus. The fix is to stamp <code>arc=pass</code> on hops at and above 2 and to verify on the wire that the chain genuinely carries <code>i=1</code>, <code>i=2</code> and <code>i=3</code>.</p>
+<p>The consequence is that the earlier ledger entry recording multi-hop ARC as a closed consensus was unbaselined and had to be re-opened, and every ARC result predating the correction is void.</p>
+<p><strong>The re-baseline under the corrected rig.</strong> With process-unique selectors, 2048-bit keys, a fresh per-run domain and TTL 0, the controls are healthy: a clean <code>i=1</code> chain and a clean <code>i=1..3</code> chain both give dkimpy <code>cv=pass</code> and Rspamd <code>ARC_ALLOW</code>, deterministically across three runs. The previously observed multi-hop <code>ARC_REJECT</code> was indeed the stale-key artefact and is gone.</p>
+<p>Of 28 mutations, 27 are consensus and deterministic:</p>
+<div class="scroll">
+<table>
+<tr><th>Mutation class</th><th>dkimpy and Rspamd</th></tr>
+<tr><td>break the AMS, AS or AAR at i1, i2 or i3; body tamper; forge <code>spf=fail</code> or <code>dmarc=pass</code> inside the AAR</td><td>consensus reject</td></tr>
+<tr><td>force <code>cv=none</code> to <code>cv=pass</code> on i1; strip the seal; strip an intermediate set; renumber i2 to i4 leaving an <code>i=</code> gap; duplicate the i1 seal; swap the i1 and i3 numbering</td><td>consensus reject</td></tr>
+<tr><td>clean <code>i=1</code>; clean <code>i=1..3</code>; strip the final set, both falling back to the inner valid <code>i=1..2</code> sub-chain</td><td>consensus pass</td></tr>
+<tr><td>i1 broken then <code>cv=pass</code> forced; i2 <code>cv=fail</code> with i3 <code>cv=pass</code></td><td>consensus reject — the section 5.1.1 <code>cv=</code> latch holds on both</td></tr>
+</table>
+</div>
+<p><strong>The one divergence.</strong> The ARC sets are re-serialised so that the physical wire order differs from the <code>i=</code> order, with the <code>i=</code> values and every header byte left intact:</p>
+<div class="scroll">
+<table>
+<tr><th>Case</th><th>dkimpy <code>arc_verify</code></th><th>Rspamd</th><th>Required</th></tr>
+<tr><td>wire order not equal to <code>i=</code> order, bytes intact</td><td><strong><code>cv=FAIL</code>, “ARC-Seal[3] did not validate”</strong></td><td><code>ARC_ALLOW</code></td><td>valid, per section 5.1.1</td></tr>
+</table>
+</div>
+<p>Two controls fix the direction. Re-sorting the reordered headers back into <code>i=</code> order restores dkimpy to pass, which proves the chain cryptography is intact and the failure is purely positional. Reorder combined with a body tamper, and reorder combined with a corrupted i2 AMS, both make Rspamd reject, which proves Rspamd is genuinely validating reordered chains rather than accepting them blindly.</p>
+
+<h2>Proof of Concept</h2>
+<p>Build a valid three-hop chain under the corrected rig, then re-serialise the ARC-Set headers so that their physical order on the wire no longer matches their <code>i=</code> values, changing no bytes within any header:</p>
+<pre><code># wire order after re-serialisation, i= values and header bytes unchanged
+ARC-Seal: i=2; ...
+ARC-Message-Signature: i=2; ...
+ARC-Authentication-Results: i=2; ...
+ARC-Seal: i=1; ...
+ARC-Message-Signature: i=1; ...
+ARC-Authentication-Results: i=1; ...
+ARC-Seal: i=3; ...
+ARC-Message-Signature: i=3; ...
+ARC-Authentication-Results: i=3; ...</code></pre>
+<p>Required per RFC 8617 section 5.1.1: the validator reconstructs by <code>i=</code>, the chain validates, <code>cv=pass</code>. Observed on Rspamd: <code>ARC_ALLOW</code>. Observed on dkimpy: <code>cv=FAIL</code> with “ARC-Seal[3] did not validate”. Sorting the same headers back into <code>i=</code> order restores dkimpy to pass.</p>
+
+<h2>Mitigation</h2>
+<p>In <code>verify_sig</code>, select the ARC-Set headers for the seal hash by their <code>i=</code> value rather than by their position on the wire, so that the hash input matches the increasing-instance order that <code>ARC.verify_instance</code> already computes and that RFC 8617 section 5.1.1 defines. The wire order of the ARC sets must not affect the outcome.</p>
+
+<h2>Notes</h2>
+<p><strong>Why this is not submitted as a vendor vulnerability.</strong> Two reasons, and both are sufficient on their own. First, the headline deliverable is a correction to the test rig rather than a defect in any product: the stale-cached-public-key artefact and the silent single-instance <code>arc_sign</code> return were both producing false results, and the value of the entry is that it invalidates and replaces them. Second, the one genuine divergence fails closed. dkimpy rejects a chain it should accept; it accepts nothing it should reject. A finding that only ever refuses mail is a reference-oracle caveat and an interoperability report to the dkimpy maintainers, not a vulnerability submission.</p>
+<p>A related lesson is recorded alongside it, because it caused a separate false positive earlier in the same vein: OpenDMARC 1.4.2 is ARC-unaware, and a foreign injected <code>Authentication-Results</code> header must never be parsed as the receiver's own verdict. Any apparent ARC override observed that way is an artefact of the harness.</p>
+<p>Outstanding work: re-run the entire ARC vein under the corrected rig, re-establish or refute the multi-hop consensus on clean keys, and update the ledger entry that recorded multi-hop ARC as closed.</p>
+
+<h2>References</h2>
+<ul>
+<li><a href="https://www.rfc-editor.org/rfc/rfc8617#section-5.1.1">RFC 8617 section 5.1.1 - Validator Actions (the ARC-Seal hash input, in increasing instance order)</a></li>
+<li><a href="https://www.rfc-editor.org/rfc/rfc8617">RFC 8617 - The Authenticated Received Chain (ARC) Protocol</a></li>
+<li><a href="https://cwe.mitre.org/data/definitions/436.html">CWE-436: Interpretation Conflict</a></li>
+<li><a href="https://pypi.org/project/dkimpy/">dkimpy</a></li>
+<li><a href="https://rspamd.com/">Rspamd</a></li>
+<li><a href="https://weitongli.com/">Weitong Li, Virginia Tech - researcher homepage</a></li>
+</ul>
+
+<footer>
+<p>Reported by <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech
+(<a href="mailto:weitongli@vt.edu">weitongli@vt.edu</a>).
+Reproduction environment and full evidence available to the vendor on request.
+CVSS is the researcher's own assessment.</p>
+</footer>
+
+</body>
+</html>

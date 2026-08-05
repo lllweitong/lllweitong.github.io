@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Superseded: OpenDMARC SPFSelfValidate mishandles the SPF %{l} local-part macro (OpenDMARC ≤ 1.4.2)</title>
+<style>
+:root { color-scheme: light dark; --fg:#111; --bg:#fff; --muted:#555; --rule:#ddd; --pre:#f5f5f5; --link:#14508c; }
+@media (prefers-color-scheme: dark) {
+  :root { --fg:#e4e4e4; --bg:#161616; --muted:#a0a0a0; --rule:#333; --pre:#1e1e1e; --link:#7fb2e5; }
+}
+body { max-width: 46rem; margin: 2.5rem auto; padding: 0 1.1rem 4rem; background: var(--bg); color: var(--fg);
+       font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+h1 { font-size: 1.35rem; line-height: 1.35; margin: 0 0 1rem; }
+h2 { font-size: 1.05rem; margin: 2rem 0 .6rem; }
+p, li { margin: .6rem 0; }
+a { color: var(--link); }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .87em; }
+pre { background: var(--pre); border: 1px solid var(--rule); padding: .75rem .85rem; overflow-x: auto;
+      font-size: .82rem; line-height: 1.45; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+table { border-collapse: collapse; width: 100%; font-size: .87rem; margin: .7rem 0; }
+th, td { border: 1px solid var(--rule); padding: .35rem .5rem; text-align: left; vertical-align: top; }
+.scroll { overflow-x: auto; }
+.hdr { font-size: .93rem; color: var(--muted); margin: 0 0 1.6rem; }
+.hdr b { color: var(--fg); font-weight: 600; }
+.lead { border-left: 3px solid var(--rule); padding-left: .85rem; margin: 0 0 1.6rem; }
+footer { margin-top: 3rem; padding-top: .8rem; border-top: 1px solid var(--rule);
+         color: var(--muted); font-size: .84rem; }
+</style>
+</head>
+<body>
+
+<h1>Superseded: OpenDMARC SPFSelfValidate mishandles the SPF %{l} local-part macro (OpenDMARC ≤ 1.4.2)</h1>
+
+<p class="hdr">
+<b>Author:</b> <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech &lt;weitongli@vt.edu&gt;<br>
+<b>Date:</b> 2026-07-31<br>
+<b>Vendor:</b> <a href="http://www.trusteddomain.org/">The Trusted Domain Project</a><br>
+<b>Software:</b> <a href="https://github.com/trusteddomainproject/OpenDMARC">OpenDMARC (SPFSelfValidate)</a><br>
+<b>Affected version:</b> OpenDMARC 1.4.2, built from the upstream tarball <code>rel-opendmarc-1-4-2</code>. The finding was originally isolated on the Debian package <code>1.4.2-1+deb12u1</code> and re-confirmed against pristine upstream. Earlier 1.4.x and 1.3.x releases are expected to share the behaviour.<br>
+<b>Vulnerable component:</b> SPF macro expansion in <code>SPFSelfValidate</code> — the <code>%{l}</code> local-part substitution. Superseded by <code>opendmarc-spf-postmaster-macro</code>.<br>
+<b>Vulnerability type:</b> CWE-20 (Improper Input Validation) - assessed at <code>opendmarc-spf-postmaster-macro</code>, not here<br>
+<b>Attack vector:</b> Not assessed separately. See <code>opendmarc-spf-postmaster-macro</code>, which establishes the correct mechanism and the conditions under which it is reachable.<br>
+<b>CVSS v3.1:</b> Not assessed separately - see `opendmarc-spf-postmaster-macro`<br>
+<b>Status:</b> The observation itself is reproducible and was confirmed with a domain-macro control. Its root cause was subsequently corrected by <code>opendmarc-spf-postmaster-macro</code>, whose query-log evidence establishes the true mechanism.
+</p>
+
+<p class="lead"><b>Impact.</b> Published for completeness and not submitted as a vendor vulnerability: the root cause recorded here was mis-diagnosed and the corrected entry, <code>opendmarc-spf-postmaster-macro</code>, supersedes it and covers the fail-open direction this entry missed.</p>
+
+<h2>Description</h2>
+<p>As framed here, the impact was denial of validation and nothing more: a legitimate sender publishing per-user SPF through <code>%{l}</code> has its own aligned mail mis-failed on OpenDMARC, which under <code>aspf</code> alignment carries into a DMARC failure. The <code>%{s}</code> sender macro follows the same code path.</p>
+<p>That account is incomplete. The corrected mechanism additionally yields SPF <code>pass</code> and therefore <code>dmarc=pass</code> on a forged local part whenever the victim's zone resolves at <code>postmaster._spf</code>, which is the direction this entry missed and the reason it should not be read on its own. The full impact statement is in <code>opendmarc-spf-postmaster-macro</code>.</p>
+<p><strong>This entry is published for completeness and is deliberately not submitted as a vendor vulnerability, because it has been superseded.</strong> Its root cause was mis-diagnosed as “OpenDMARC does not expand <code>%{l}</code>”. The behaviour established later, with the authoritative server's query log as ground truth, is that OpenDMARC <em>always</em> expands <code>%{l}</code> to the literal string <code>postmaster</code>. Readers should go to <code>opendmarc-spf-postmaster-macro</code>, which carries the corrected mechanism and the assessment.</p>
+<p>The distinction matters. “Does not expand” implies the term simply never matches, which is a purely fail-closed denial of validation, and that is how this entry framed the impact. Always expanding to <code>postmaster</code> reproduces the same fail-closed observation <em>and</em> opens a fail-open direction, because an A record published at <code>postmaster._spf</code> makes OpenDMARC match and return SPF <code>pass</code> for a forged local part. This entry's framing was therefore incomplete rather than merely imprecise.</p>
+<p>What was observed here. With a victim record <code>exists:%{l}.k.probe.example.com</code>, an envelope local part of <code>alice</code>, and the probe node published at the real local part:</p>
+<div class="scroll">
+<table>
+<tr><th>Macro under test</th><th>OpenDMARC</th><th>Rspamd</th></tr>
+<tr><td><code>%{l}</code>, local part <code>alice</code></td><td><strong>spf=fail</strong> — <code>alice.k.probe...</code> is never matched</td><td>spf=pass — queries <code>alice.k.probe...</code>; tracks <code>alice</code> to <code>alice</code> and <code>bob123</code> to <code>bob123</code></td></tr>
+<tr><td><code>%{o}</code> and <code>%{d}</code>, the domain macros (control)</td><td>pass</td><td>pass</td></tr>
+</table>
+</div>
+<p>The domain-macro control is a consensus, so the gap was correctly localised to the local-part macro letter. That much of this entry stands.</p>
+<p>What was wrong. The inference “does not expand” was drawn from a setup in which the A record sat at the real local part, a setup under which non-expansion and expansion-to-a-wrong-value are indistinguishable, because both simply fail to match. Moving the A record to <code>postmaster._spf</code> separates them, and the authoritative server's query log then shows OpenDMARC asking for <code>postmaster._spf</code> while Rspamd asks for <code>alice._spf</code>. A null sender, <code>MAIL FROM:&lt;&gt;</code>, makes both query <code>postmaster._spf</code>, which pins the mechanism further: OpenDMARC applies the null-sender substitution rule to non-null senders.</p>
+<div class="scroll">
+<table>
+<tr><th></th><th>This entry</th><th>The corrected entry</th></tr>
+<tr><td>Stated root cause</td><td><code>%{l}</code> is not expanded</td><td><code>%{l}</code> is always expanded to <code>postmaster</code></td></tr>
+<tr><td>Evidence</td><td>verdict only, with the probe at the real local part</td><td>verdicts plus the authoritative server's query log, with the probe moved</td></tr>
+<tr><td>Direction</td><td>fail-closed only</td><td>fail-closed <em>and</em> fail-open</td></tr>
+<tr><td>Assessment</td><td>not assessed separately</td><td>CVSS 5.9 (Medium)</td></tr>
+</table>
+</div>
+
+<h2>Proof of Concept</h2>
+<p>The probe as originally run, retained for the record:</p>
+<pre><code>victim.example. IN TXT "v=spf1 exists:%{l}.k.probe.example.com -all"
+alice.k.probe.example.com. IN A 203.0.113.9
+# MAIL FROM:&lt;alice@victim.example&gt;</code></pre>
+<p>Observed: OpenDMARC <code>spf=fail</code>, Rspamd <code>spf=pass</code>. For the reproducer that actually distinguishes the two candidate causes, and for the fail-open case, use the proof of concept in <code>opendmarc-spf-postmaster-macro</code>, which publishes the A record at <code>postmaster._spf</code> instead.</p>
+
+<h2>Mitigation</h2>
+<p>The fix is stated in <code>opendmarc-spf-postmaster-macro</code>: expand <code>%{l}</code> and <code>%{s}</code> from the local part of the checked identity, and substitute <code>postmaster</code> only when the reverse path is null, per RFC 7208 sections 7.3, 2.4 and 4.3. A single change closes both the fail-closed and the fail-open direction, which is a further reason to carry one entry rather than two.</p>
+
+<h2>Notes</h2>
+<p><strong>Why this is not submitted separately.</strong> It is the same defect as <code>opendmarc-spf-postmaster-macro</code>, described less accurately. Submitting both would report one code path twice, and the weaker of the two descriptions states a root cause that is not the real one and omits the fail-open direction entirely, which would understate the finding to the vendor. The entry is retained here only so that the correction is visible and the earlier framing is not silently dropped from the record.</p>
+<p>The methodological point is worth keeping. A verdict-only differential cannot distinguish “the macro is not expanded” from “the macro is expanded to the wrong value” when the probe node sits at the value the correct expansion would produce, because both fail to match. Moving the probe, and reading the authoritative server's query log rather than the verdict, is what separated them.</p>
+
+<h2>References</h2>
+<ul>
+<li>The corrected entry, <code>opendmarc-spf-postmaster-macro</code>, which supersedes this one (not linked: each page is standalone)</li>
+<li><a href="https://www.rfc-editor.org/rfc/rfc7208#section-7.2">RFC 7208 section 7.2 - Macro Definitions</a></li>
+<li><a href="https://www.rfc-editor.org/rfc/rfc7208#section-7.3">RFC 7208 section 7.3 - Macro Processing Details</a></li>
+<li><a href="https://www.rfc-editor.org/rfc/rfc7208#section-4.3">RFC 7208 section 4.3 - Initial Processing (the postmaster substitution)</a></li>
+<li><a href="https://cwe.mitre.org/data/definitions/20.html">CWE-20: Improper Input Validation</a></li>
+<li><a href="https://github.com/trusteddomainproject/OpenDMARC">OpenDMARC repository</a></li>
+<li><a href="https://weitongli.com/">Weitong Li, Virginia Tech - researcher homepage</a></li>
+</ul>
+
+<footer>
+<p>Reported by <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech
+(<a href="mailto:weitongli@vt.edu">weitongli@vt.edu</a>).
+Reproduction environment and full evidence available to the vendor on request.
+CVSS is the researcher's own assessment.</p>
+</footer>
+
+</body>
+</html>

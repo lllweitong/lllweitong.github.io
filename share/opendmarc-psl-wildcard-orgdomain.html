@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>OpenDMARC computes an over-broad organisational domain under a Public Suffix List wildcard rule, letting a co-tenant host spoof its neighbour (OpenDMARC ≤ 1.4.2)</title>
+<style>
+:root { color-scheme: light dark; --fg:#111; --bg:#fff; --muted:#555; --rule:#ddd; --pre:#f5f5f5; --link:#14508c; }
+@media (prefers-color-scheme: dark) {
+  :root { --fg:#e4e4e4; --bg:#161616; --muted:#a0a0a0; --rule:#333; --pre:#1e1e1e; --link:#7fb2e5; }
+}
+body { max-width: 46rem; margin: 2.5rem auto; padding: 0 1.1rem 4rem; background: var(--bg); color: var(--fg);
+       font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+h1 { font-size: 1.35rem; line-height: 1.35; margin: 0 0 1rem; }
+h2 { font-size: 1.05rem; margin: 2rem 0 .6rem; }
+p, li { margin: .6rem 0; }
+a { color: var(--link); }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .87em; }
+pre { background: var(--pre); border: 1px solid var(--rule); padding: .75rem .85rem; overflow-x: auto;
+      font-size: .82rem; line-height: 1.45; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+table { border-collapse: collapse; width: 100%; font-size: .87rem; margin: .7rem 0; }
+th, td { border: 1px solid var(--rule); padding: .35rem .5rem; text-align: left; vertical-align: top; }
+.scroll { overflow-x: auto; }
+.hdr { font-size: .93rem; color: var(--muted); margin: 0 0 1.6rem; }
+.hdr b { color: var(--fg); font-weight: 600; }
+.lead { border-left: 3px solid var(--rule); padding-left: .85rem; margin: 0 0 1.6rem; }
+footer { margin-top: 3rem; padding-top: .8rem; border-top: 1px solid var(--rule);
+         color: var(--muted); font-size: .84rem; }
+</style>
+</head>
+<body>
+
+<h1>OpenDMARC computes an over-broad organisational domain under a Public Suffix List wildcard rule, letting a co-tenant host spoof its neighbour (OpenDMARC ≤ 1.4.2)</h1>
+
+<p class="hdr">
+<b>Author:</b> <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech &lt;weitongli@vt.edu&gt;<br>
+<b>Date:</b> 2026-07-31<br>
+<b>Vendor:</b> <a href="http://www.trusteddomain.org/">The Trusted Domain Project</a><br>
+<b>Software:</b> <a href="https://github.com/trusteddomainproject/OpenDMARC">OpenDMARC</a><br>
+<b>Affected version:</b> OpenDMARC 1.4.2, built from the upstream tarball <code>rel-opendmarc-1-4-2</code>. The finding was originally isolated on the Debian package <code>1.4.2-1+deb12u1</code> and re-confirmed against pristine upstream. Earlier 1.4.x and 1.3.x releases are expected to share the behaviour.<br>
+<b>Vulnerable component:</b> DMARC organisational-domain computation from the Public Suffix List, under a wildcard (<code>*</code>) rule<br>
+<b>Vulnerability type:</b> CWE-346 (Origin Validation Error) leading to CWE-290 (Authentication Bypass by Spoofing)<br>
+<b>Attack vector:</b> Remote. The attacker must control one host under the same wildcard suffix as the victim, which on shared cloud infrastructure means renting an instance.<br>
+<b>CVSS v3.1:</b> 6.5 (Medium) &mdash; <code>CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:N/I:H/A:N</code><br>
+<b>Status:</b> Reproduced on 2026-07-28 against the current release (run <code>20260728-120957</code>) with a scripted reproducer, negative controls, and a second independent implementation as the differential oracle. The wildcard rule was verified byte-identical in both verifiers' Public Suffix List files, so the divergence is an algorithm defect and not a data difference.
+</p>
+
+<p class="lead"><b>Impact.</b> Under a rule such as *.compute.amazonaws.com, OpenDMARC stops one label short, so any sibling host's DKIM signature relaxed-aligns with the victim.</p>
+
+<h2>Description</h2>
+<p>On shared wildcard infrastructure — AWS EC2 <code>*.compute.amazonaws.com</code>, <code>*.elasticbeanstalk.com</code>, <code>*.r.appspot.com</code> and the many similar entries in the Public Suffix List — an attacker who controls one host under the wildcard can spoof a co-tenant past OpenDMARC under <code>p=reject; adkim=r</code>. Obtaining such a host is a matter of renting an instance, so the practical barrier is low even though the CVSS vector records it as a privilege requirement.</p>
+<p>The wildcard entries exist in the Public Suffix List precisely to keep such tenants in separate organisations, so this defeats the isolation the list is there to provide.</p>
+<p>A Public Suffix List wildcard rule such as <code>*.compute.amazonaws.com</code> makes <code>tenanta.compute.amazonaws.com</code> itself a public suffix. The registrable, that is organisational, domain of <code>x.tenanta.compute.amazonaws.com</code> is therefore the full name: public suffix plus one label.</p>
+<p>OpenDMARC stops at the wildcard-matched suffix and computes the organisational domain as <code>tenanta.compute.amazonaws.com</code> — one label short. Every host under that wildcard child is then treated as sharing an organisation with every other, so under relaxed alignment a DKIM signature from any sibling host aligns with the victim's From domain.</p>
+<p>With <code>From=x.tenanta.compute.amazonaws.com</code> and <code>_dmarc.x.tenanta.compute.amazonaws.com</code> publishing <code>v=DMARC1; p=reject; adkim=r</code>:</p>
+<div class="scroll">
+<table>
+<tr><th>DKIM <code>d=</code></th><th>OpenDMARC</th><th>Rspamd</th><th>Required</th></tr>
+<tr><td><code>z.tenanta.compute.amazonaws.com</code> (sibling host, a distinct registrable domain)</td><td><strong>pass — bypass</strong></td><td>reject</td><td>reject</td></tr>
+<tr><td><code>z.tenantb.compute.amazonaws.com</code> (a different wildcard child, control)</td><td>fail</td><td>fail</td><td>fail</td></tr>
+<tr><td><code>plain.compute.amazonaws.com</code> (one level up, control)</td><td>fail</td><td>fail</td><td>fail</td></tr>
+</table>
+</div>
+<p>The two controls bound the defect precisely. OpenDMARC collapses to <code>tenanta.compute.amazonaws.com</code> and not all the way to <code>amazonaws.com</code>, so the error is exactly one label and it makes siblings under the same wildcard child, and only those, wrongly share an organisation.</p>
+<p><strong>The Public Suffix List data is not the cause.</strong> OpenDMARC reads <code>/usr/share/publicsuffix/public_suffix_list.dat</code> and Rspamd reads <code>/usr/share/rspamd/effective_tld_names.dat</code>, which are different files, but <code>*.compute.amazonaws.com</code> is byte-identical in both, and computing the canonical registrable domain with the <code>publicsuffixlist</code> library over each container's own file agrees with Rspamd. The divergence is therefore in OpenDMARC's label counting.</p>
+
+<h2>Proof of Concept</h2>
+<pre><code># zone
+_dmarc.x.tenanta.compute.amazonaws.com.  IN  TXT  "v=DMARC1; p=reject; adkim=r"
+
+# attacker publishes a DKIM key for the host they control
+sel._domainkey.z.tenanta.compute.amazonaws.com.  IN  TXT  "v=DKIM1; k=rsa; p=..."</code></pre>
+<p>Send a message with <code>From: ceo@x.tenanta.compute.amazonaws.com</code>, signed <code>d=z.tenanta.compute.amazonaws.com</code> with the attacker's own valid key. Required: <code>dmarc=fail</code>, since the two are distinct registrable domains and cannot align even under <code>adkim=r</code>. Observed on OpenDMARC: <code>dmarc=pass</code>.</p>
+
+<h2>Mitigation</h2>
+<p>When the matched Public Suffix List rule is a wildcard, the public suffix includes the label the wildcard matched. The organisational domain is that suffix plus one further label. Add the wildcard's matched label to the count before taking the registrable domain.</p>
+
+<h2>Notes</h2>
+<p>Pairs with <code>rspamd-psl-rules-ignored</code>, in which Rspamd mishandles the same class of rules in the opposite direction. Distinct from <code>psl-snapshot-drift</code>, which is a data-freshness divergence between the two vendored lists rather than an algorithm defect.</p>
+<p>The laboratory's <code>example.com</code>-as-public-suffix fixture was deliberately not used for this test; no <code>example.com</code> name appears anywhere in the reproduction.</p>
+
+<h2>References</h2>
+<ul>
+<li><a href="https://www.rfc-editor.org/rfc/rfc7489#section-3.2">RFC 7489 section 3.2 - Organizational Domain</a></li>
+<li><a href="https://publicsuffix.org/list/">Public Suffix List format, including wildcard and exception rules</a></li>
+<li><a href="https://cwe.mitre.org/data/definitions/346.html">CWE-346: Origin Validation Error</a></li>
+<li><a href="https://github.com/trusteddomainproject/OpenDMARC">OpenDMARC repository</a></li>
+<li><a href="https://weitongli.com/">Weitong Li, Virginia Tech - researcher homepage</a></li>
+</ul>
+
+<footer>
+<p>Reported by <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech
+(<a href="mailto:weitongli@vt.edu">weitongli@vt.edu</a>).
+Reproduction environment and full evidence available to the vendor on request.
+CVSS is the researcher's own assessment.</p>
+</footer>
+
+</body>
+</html>
