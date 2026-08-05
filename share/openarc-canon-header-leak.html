@@ -38,6 +38,7 @@ footer { margin-top: 3rem; padding-top: .8rem; border-top: 1px solid var(--rule)
 <b>Date:</b> 2026-07-31<br>
 <b>Vendor:</b> <a href="http://www.trusteddomain.org/">The Trusted Domain Project</a><br>
 <b>Software:</b> <a href="https://github.com/trusteddomainproject/OpenARC">OpenARC (libopenarc)</a><br>
+<b>Source code:</b> <a href="https://github.com/trusteddomainproject/OpenARC">https://github.com/trusteddomainproject/OpenARC</a><br>
 <b>Affected version:</b> Current upstream <code>master</code>.<br>
 <b>Vulnerable component:</b> <code>libopenarc/arc-canon.c</code>, <code>arc_canon_runheaders()</code>; the allocation from <code>arc_dstring_new()</code> is not released by <code>arc_free()</code><br>
 <b>Vulnerability type:</b> CWE-401 (Missing Release of Memory after Effective Lifetime)<br>

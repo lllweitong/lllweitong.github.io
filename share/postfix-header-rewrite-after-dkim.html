@@ -38,6 +38,7 @@ footer { margin-top: 3rem; padding-top: .8rem; border-top: 1px solid var(--rule)
 <b>Date:</b> 2026-07-31<br>
 <b>Vendor:</b> <a href="http://www.trusteddomain.org/">The Postfix project (Wietse Venema)</a><br>
 <b>Software:</b> <a href="http://www.opendkim.org/">Postfix, in a milter chain with OpenDKIM and OpenDMARC</a><br>
+<b>Source code:</b> <a href="https://github.com/vdukhovni/postfix">https://github.com/vdukhovni/postfix</a><br>
 <b>Affected version:</b> Postfix 3.10.12 in a milter chain with OpenDKIM 2.11.0 and OpenDMARC 1.4.2. The finding was originally isolated on Postfix 3.7.11. The defect is one of pipeline ordering rather than of any single component's own logic.<br>
 <b>Vulnerable component:</b> Milter pipeline ordering — the interaction between <code>smtp_line_length_limit</code> line rewriting and milter-time DKIM verification<br>
 <b>Vulnerability type:</b> CWE-367 (Time-of-check Time-of-use (TOCTOU) Race Condition)<br>

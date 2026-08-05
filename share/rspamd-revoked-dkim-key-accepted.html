@@ -38,6 +38,7 @@ footer { margin-top: 3rem; padding-top: .8rem; border-top: 1px solid var(--rule)
 <b>Date:</b> 2026-07-31<br>
 <b>Vendor:</b> <a href="http://www.trusteddomain.org/">Rspamd project (Vsevolod Stakhov)</a><br>
 <b>Software:</b> <a href="http://www.opendkim.org/">Rspamd (OpenDKIM is also non-conformant, in an order-dependent way)</a><br>
+<b>Source code:</b> <a href="https://github.com/rspamd/rspamd">https://github.com/rspamd/rspamd</a><br>
 <b>Affected version:</b> Rspamd 4.1.2, originally isolated on 3.10.2. OpenDKIM 2.11.0 is last-tag-wins; dkimpy is correct.<br>
 <b>Vulnerable component:</b> DKIM public-key record parsing — the <code>p=</code> field and the empty-value revocation marker<br>
 <b>Vulnerability type:</b> CWE-347 (Improper Verification of Cryptographic Signature) / CWE-299 (Improper Check for Certificate Revocation)<br>

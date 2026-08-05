@@ -38,6 +38,7 @@ footer { margin-top: 3rem; padding-top: .8rem; border-top: 1px solid var(--rule)
 <b>Date:</b> 2026-07-31<br>
 <b>Vendor:</b> <a href="http://www.trusteddomain.org/">The Trusted Domain Project</a><br>
 <b>Software:</b> <a href="https://github.com/trusteddomainproject/OpenDMARC">OpenDMARC</a><br>
+<b>Source code:</b> <a href="https://github.com/trusteddomainproject/OpenDMARC">https://github.com/trusteddomainproject/OpenDMARC</a><br>
 <b>Affected version:</b> OpenDMARC 1.4.2, built from the upstream tarball <code>rel-opendmarc-1-4-2</code>. The finding was originally isolated on the Debian package <code>1.4.2-1+deb12u1</code> and re-confirmed against pristine upstream. Earlier 1.4.x and 1.3.x releases are expected to share the behaviour.<br>
 <b>Vulnerable component:</b> DMARC Author Domain extraction — the missing IDNA ToASCII conversion before the <code>_dmarc</code> lookup and alignment<br>
 <b>Vulnerability type:</b> CWE-172 (Encoding Error) / CWE-290 (Authentication Bypass by Spoofing)<br>

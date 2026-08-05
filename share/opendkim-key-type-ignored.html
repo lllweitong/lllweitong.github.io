@@ -38,6 +38,7 @@ footer { margin-top: 3rem; padding-top: .8rem; border-top: 1px solid var(--rule)
 <b>Date:</b> 2026-07-31<br>
 <b>Vendor:</b> <a href="http://www.trusteddomain.org/">The Trusted Domain Project</a><br>
 <b>Software:</b> <a href="http://www.opendkim.org/">OpenDKIM</a><br>
+<b>Source code:</b> <a href="https://github.com/trusteddomainproject/OpenDKIM">https://github.com/trusteddomainproject/OpenDKIM</a><br>
 <b>Affected version:</b> OpenDKIM 2.11.0 (Debian package <code>2.11.0~beta2-9.1+b1</code>). Rspamd 4.1.2 and dkimpy 1.1.8 both reject the same records correctly.<br>
 <b>Vulnerable component:</b> DKIM public-key record handling — the <code>k=</code> key-type tag of RFC 6376 section 3.6.1 and its binding to the signature algorithm<br>
 <b>Vulnerability type:</b> CWE-347 (Improper Verification of Cryptographic Signature) / CWE-757 (Selection of Less-Secure Algorithm During Negotiation)<br>

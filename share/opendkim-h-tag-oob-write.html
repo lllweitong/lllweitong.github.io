@@ -38,6 +38,7 @@ footer { margin-top: 3rem; padding-top: .8rem; border-top: 1px solid var(--rule)
 <b>Date:</b> 2026-07-31<br>
 <b>Vendor:</b> <a href="http://www.trusteddomain.org/">The Trusted Domain Project</a><br>
 <b>Software:</b> <a href="http://www.opendkim.org/">OpenDKIM (libopendkim)</a><br>
+<b>Source code:</b> <a href="https://github.com/trusteddomainproject/OpenDKIM">https://github.com/trusteddomainproject/OpenDKIM</a><br>
 <b>Affected version:</b> OpenDKIM 2.11.0 (Debian package <code>2.11.0~beta2-9.1+b1</code>) and current upstream <code>master</code>. The defective loop is long-standing; earlier 2.x releases are expected to be affected.<br>
 <b>Vulnerable component:</b> <code>libopendkim/dkim-canon.c</code>, <code>dkim_canon_selecthdrs()</code> line 1052, reached from <code>dkim_canon_runheaders()</code> during <code>dkim_eoh()</code><br>
 <b>Vulnerability type:</b> CWE-787 (Out-of-bounds Write)<br>

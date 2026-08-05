@@ -38,6 +38,7 @@ footer { margin-top: 3rem; padding-top: .8rem; border-top: 1px solid var(--rule)
 <b>Date:</b> 2026-07-31<br>
 <b>Vendor:</b> <a href="http://www.trusteddomain.org/">The Trusted Domain Project</a><br>
 <b>Software:</b> <a href="https://github.com/trusteddomainproject/OpenDMARC">OpenDMARC (libopendmarc, internal SPF engine)</a><br>
+<b>Source code:</b> <a href="https://github.com/trusteddomainproject/OpenDMARC">https://github.com/trusteddomainproject/OpenDMARC</a><br>
 <b>Affected version:</b> OpenDMARC 1.4.2 and earlier, and current upstream <code>master</code>, when built <code>--with-spf</code> <em>without</em> libspf2.<br>
 <b>Vulnerable component:</b> <code>libopendmarc/opendmarc_spf.c</code>, <code>opendmarc_spf_ipv6_explode()</code> line 729, reached from <code>opendmarc_spf_ipv6_cidr_check()</code> line 798<br>
 <b>Vulnerability type:</b> CWE-476 (NULL Pointer Dereference) / invalid pointer dereference<br>

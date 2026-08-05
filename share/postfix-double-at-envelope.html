@@ -38,6 +38,7 @@ footer { margin-top: 3rem; padding-top: .8rem; border-top: 1px solid var(--rule)
 <b>Date:</b> 2026-07-31<br>
 <b>Vendor:</b> <a href="https://www.postfix.org/">The Postfix project (Wietse Venema)</a><br>
 <b>Software:</b> <a href="https://www.postfix.org/download.html">Postfix</a><br>
+<b>Source code:</b> <a href="https://github.com/vdukhovni/postfix">https://github.com/vdukhovni/postfix</a><br>
 <b>Affected version:</b> Postfix 3.10.12, the current release under test. The differential peers are Exim 4.96 and OpenSMTPD, both of which reject the input Postfix accepts.<br>
 <b>Vulnerable component:</b> SMTP envelope address parsing in <code>smtpd</code> — acceptance and silent rewriting of a Mailbox whose local part contains an unquoted <code>@</code><br>
 <b>Vulnerability type:</b> CWE-436 (Interpretation Conflict)<br>
