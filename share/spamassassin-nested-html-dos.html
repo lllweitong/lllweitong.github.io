@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
-<title>Apache SpamAssassin quadratic-time denial of service on deeply nested HTML (Apache SpamAssassin 3.4.6)</title>
+<title>Apache SpamAssassin quadratic-time denial of service on deeply nested HTML (Apache SpamAssassin 3.4.6; latest version tested 2026-07-30)</title>
 <style>
 :root { color-scheme: light dark; --fg:#111; --bg:#fff; --muted:#555; --rule:#ddd; --pre:#f5f5f5; --link:#14508c; }
 @media (prefers-color-scheme: dark) {
@@ -31,7 +31,7 @@ footer { margin-top: 3rem; padding-top: .8rem; border-top: 1px solid var(--rule)
 </head>
 <body>
 
-<h1>Apache SpamAssassin quadratic-time denial of service on deeply nested HTML (Apache SpamAssassin 3.4.6)</h1>
+<h1>Apache SpamAssassin quadratic-time denial of service on deeply nested HTML (Apache SpamAssassin 3.4.6; latest version tested 2026-07-30)</h1>
 
 <p class="hdr">
 <b>Author:</b> <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech &lt;weitongli@vt.edu&gt;<br>
@@ -39,7 +39,7 @@ footer { margin-top: 3rem; padding-top: .8rem; border-top: 1px solid var(--rule)
 <b>Vendor:</b> <a href="https://www.apache.org/">The Apache Software Foundation (Apache SpamAssassin)</a><br>
 <b>Software:</b> <a href="https://spamassassin.apache.org/">Apache SpamAssassin</a><br>
 <b>Source code:</b> <a href="https://github.com/apache/spamassassin">https://github.com/apache/spamassassin</a><br>
-<b>Affected version:</b> 3.4.6 (the version tested). Other releases sharing the same HTML processing are likely affected; not yet verified against 4.x.<br>
+<b>Affected version:</b> 3.4.6 (the version tested). Other releases sharing the same HTML processing are likely affected; not yet verified against 4.x. Latest version tested on 2026-07-30.<br>
 <b>Vulnerable component:</b> HTML body processing — <code>Mail::SpamAssassin::HTML</code> and its <code>HTML::Parser</code> usage; the exact quadratic loop is not yet pinpointed.<br>
 <b>Vulnerability type:</b> CWE-407 (Inefficient Algorithmic Complexity)<br>
 <b>Attack vector:</b> Remote, unauthenticated. One inbound e-mail; SpamAssassin scans the HTML body of every message.<br>

@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
-<title>Rspamd ignores DKIM key revocation when a valid p= tag coexists with the empty revocation marker (OpenDKIM &lt;= 2.11.0 and Rspamd ≤ 4.1.2)</title>
+<title>Rspamd ignores DKIM key revocation when a valid p= tag coexists with the empty revocation marker (OpenDKIM &lt;= 2.11.0 and Rspamd ≤ 4.1.2; latest version tested 2026-07-30)</title>
 <style>
 :root { color-scheme: light dark; --fg:#111; --bg:#fff; --muted:#555; --rule:#ddd; --pre:#f5f5f5; --link:#14508c; }
 @media (prefers-color-scheme: dark) {
@@ -31,7 +31,7 @@ footer { margin-top: 3rem; padding-top: .8rem; border-top: 1px solid var(--rule)
 </head>
 <body>
 
-<h1>Rspamd ignores DKIM key revocation when a valid p= tag coexists with the empty revocation marker (OpenDKIM &lt;= 2.11.0 and Rspamd ≤ 4.1.2)</h1>
+<h1>Rspamd ignores DKIM key revocation when a valid p= tag coexists with the empty revocation marker (OpenDKIM &lt;= 2.11.0 and Rspamd ≤ 4.1.2; latest version tested 2026-07-30)</h1>
 
 <p class="hdr">
 <b>Author:</b> <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech &lt;weitongli@vt.edu&gt;<br>
@@ -39,7 +39,7 @@ footer { margin-top: 3rem; padding-top: .8rem; border-top: 1px solid var(--rule)
 <b>Vendor:</b> <a href="http://www.trusteddomain.org/">Rspamd project (Vsevolod Stakhov)</a><br>
 <b>Software:</b> <a href="http://www.opendkim.org/">Rspamd (OpenDKIM is also non-conformant, in an order-dependent way)</a><br>
 <b>Source code:</b> <a href="https://github.com/rspamd/rspamd">https://github.com/rspamd/rspamd</a><br>
-<b>Affected version:</b> Rspamd 4.1.2, originally isolated on 3.10.2. OpenDKIM 2.11.0 is last-tag-wins; dkimpy is correct.<br>
+<b>Affected version:</b> Rspamd 4.1.2, originally isolated on 3.10.2. OpenDKIM 2.11.0 is last-tag-wins; dkimpy is correct. Latest version tested on 2026-07-30.<br>
 <b>Vulnerable component:</b> DKIM public-key record parsing — the <code>p=</code> field and the empty-value revocation marker<br>
 <b>Vulnerability type:</b> CWE-347 (Improper Verification of Cryptographic Signature) / CWE-299 (Improper Check for Certificate Revocation)<br>
 <b>Attack vector:</b> Remote. Requires the victim's key record to carry both values, through a stale entry, a mistaken revocation, or record injection.<br>

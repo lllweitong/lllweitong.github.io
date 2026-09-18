@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
-<title>OpenDMARC and Rspamd repair a two-mailbox From header to opposite mailboxes, allowing a verifier-aware DMARC bypass (OpenDMARC &lt;= 1.4.2 and Rspamd ≤ 4.1.2)</title>
+<title>OpenDMARC and Rspamd repair a two-mailbox From header to opposite mailboxes, allowing a verifier-aware DMARC bypass (OpenDMARC &lt;= 1.4.2 and Rspamd ≤ 4.1.2; latest version tested 2026-07-30)</title>
 <style>
 :root { color-scheme: light dark; --fg:#111; --bg:#fff; --muted:#555; --rule:#ddd; --pre:#f5f5f5; --link:#14508c; }
 @media (prefers-color-scheme: dark) {
@@ -31,7 +31,7 @@ footer { margin-top: 3rem; padding-top: .8rem; border-top: 1px solid var(--rule)
 </head>
 <body>
 
-<h1>OpenDMARC and Rspamd repair a two-mailbox From header to opposite mailboxes, allowing a verifier-aware DMARC bypass (OpenDMARC &lt;= 1.4.2 and Rspamd ≤ 4.1.2)</h1>
+<h1>OpenDMARC and Rspamd repair a two-mailbox From header to opposite mailboxes, allowing a verifier-aware DMARC bypass (OpenDMARC &lt;= 1.4.2 and Rspamd ≤ 4.1.2; latest version tested 2026-07-30)</h1>
 
 <p class="hdr">
 <b>Author:</b> <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech &lt;weitongli@vt.edu&gt;<br>
@@ -39,7 +39,7 @@ footer { margin-top: 3rem; padding-top: .8rem; border-top: 1px solid var(--rule)
 <b>Vendor:</b> <a href="http://www.trusteddomain.org/">The Trusted Domain Project and the Rspamd project (Vsevolod Stakhov)</a><br>
 <b>Software:</b> <a href="https://github.com/trusteddomainproject/OpenDMARC">OpenDMARC and Rspamd (both affected, in opposite directions)</a><br>
 <b>Source code:</b> <a href="https://github.com/trusteddomainproject/OpenDMARC">https://github.com/trusteddomainproject/OpenDMARC</a><br>
-<b>Affected version:</b> OpenDMARC 1.4.2 (takes the last mailbox) and Rspamd 4.1.2, originally isolated on 3.10.2 (takes the first).<br>
+<b>Affected version:</b> OpenDMARC 1.4.2 (takes the last mailbox) and Rspamd 4.1.2, originally isolated on 3.10.2 (takes the first). Latest version tested on 2026-07-30.<br>
 <b>Vulnerable component:</b> DMARC Author Domain extraction from a malformed RFC 5322 From header<br>
 <b>Vulnerability type:</b> CWE-436 (Interpretation Conflict) leading to CWE-290 (Authentication Bypass by Spoofing)<br>
 <b>Attack vector:</b> Remote. The attacker needs a domain of their own with a valid DKIM key, which is freely obtainable.<br>

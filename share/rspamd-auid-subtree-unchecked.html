@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
-<title>Rspamd does not check that a DKIM signature&#x27;s i= AUID lies within the d= domain, so a valid signature can carry an arbitrary authenticated identity (Rspamd ≤ 4.1.2)</title>
+<title>Rspamd does not check that a DKIM signature&#x27;s i= AUID lies within the d= domain, so a valid signature can carry an arbitrary authenticated identity (Rspamd ≤ 4.1.2; latest version tested 2026-07-30)</title>
 <style>
 :root { color-scheme: light dark; --fg:#111; --bg:#fff; --muted:#555; --rule:#ddd; --pre:#f5f5f5; --link:#14508c; }
 @media (prefers-color-scheme: dark) {
@@ -31,7 +31,7 @@ footer { margin-top: 3rem; padding-top: .8rem; border-top: 1px solid var(--rule)
 </head>
 <body>
 
-<h1>Rspamd does not check that a DKIM signature's i= AUID lies within the d= domain, so a valid signature can carry an arbitrary authenticated identity (Rspamd ≤ 4.1.2)</h1>
+<h1>Rspamd does not check that a DKIM signature's i= AUID lies within the d= domain, so a valid signature can carry an arbitrary authenticated identity (Rspamd ≤ 4.1.2; latest version tested 2026-07-30)</h1>
 
 <p class="hdr">
 <b>Author:</b> <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech &lt;weitongli@vt.edu&gt;<br>
@@ -39,7 +39,7 @@ footer { margin-top: 3rem; padding-top: .8rem; border-top: 1px solid var(--rule)
 <b>Vendor:</b> <a href="https://rspamd.com/">Rspamd project (Vsevolod Stakhov)</a><br>
 <b>Software:</b> <a href="https://github.com/rspamd/rspamd">Rspamd</a><br>
 <b>Source code:</b> <a href="https://github.com/rspamd/rspamd">https://github.com/rspamd/rspamd</a><br>
-<b>Affected version:</b> Rspamd 4.1.2. Originally isolated on 3.10.2 and re-confirmed on 4.1.2 on 2026-07-28. OpenDKIM 2.11.0 enforces the relationship correctly.<br>
+<b>Affected version:</b> Rspamd 4.1.2. Originally isolated on 3.10.2 and re-confirmed on 4.1.2 on 2026-07-28. OpenDKIM 2.11.0 enforces the relationship correctly. Latest version tested on 2026-07-30.<br>
 <b>Vulnerable component:</b> DKIM-Signature tag validation — the RFC 6376 section 3.5 constraint that the <code>i=</code> AUID domain be <code>d=</code> or a subdomain of it<br>
 <b>Vulnerability type:</b> CWE-347 (Improper Verification of Cryptographic Signature) / CWE-20 (Improper Input Validation)<br>
 <b>Attack vector:</b> Remote. The attacker must be able to obtain one valid signature under the target <code>d=</code>, for instance through a shared signing service, a re-signing list, or a delegated selector.<br>

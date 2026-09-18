@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
-<title>OpenDMARC one-byte stack-buffer underflow in opendmarc_util_finddomain() (OpenDMARC ≤ 1.4.2)</title>
+<title>OpenDMARC one-byte stack-buffer underflow in opendmarc_util_finddomain() (OpenDMARC ≤ 1.4.2; latest version tested 2026-07-30)</title>
 <style>
 :root { color-scheme: light dark; --fg:#111; --bg:#fff; --muted:#555; --rule:#ddd; --pre:#f5f5f5; --link:#14508c; }
 @media (prefers-color-scheme: dark) {
@@ -31,7 +31,7 @@ footer { margin-top: 3rem; padding-top: .8rem; border-top: 1px solid var(--rule)
 </head>
 <body>
 
-<h1>OpenDMARC one-byte stack-buffer underflow in opendmarc_util_finddomain() (OpenDMARC ≤ 1.4.2)</h1>
+<h1>OpenDMARC one-byte stack-buffer underflow in opendmarc_util_finddomain() (OpenDMARC ≤ 1.4.2; latest version tested 2026-07-30)</h1>
 
 <p class="hdr">
 <b>Author:</b> <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech &lt;weitongli@vt.edu&gt;<br>
@@ -39,7 +39,7 @@ footer { margin-top: 3rem; padding-top: .8rem; border-top: 1px solid var(--rule)
 <b>Vendor:</b> <a href="http://www.trusteddomain.org/">The Trusted Domain Project</a><br>
 <b>Software:</b> <a href="https://github.com/trusteddomainproject/OpenDMARC">OpenDMARC (libopendmarc)</a><br>
 <b>Source code:</b> <a href="https://github.com/trusteddomainproject/OpenDMARC">https://github.com/trusteddomainproject/OpenDMARC</a><br>
-<b>Affected version:</b> OpenDMARC 1.4.2 and earlier, and current upstream <code>master</code> (commit <code>bf37d53</code>).<br>
+<b>Affected version:</b> OpenDMARC 1.4.2 and earlier, and current upstream <code>master</code> (commit <code>bf37d53</code>). Latest version tested on 2026-07-30.<br>
 <b>Vulnerable component:</b> <code>libopendmarc/opendmarc_util.c</code>, <code>opendmarc_util_finddomain()</code> line 278, called from <code>opendmarc_policy_store_from_domain()</code><br>
 <b>Vulnerability type:</b> CWE-125 (Out-of-bounds Read)<br>
 <b>Attack vector:</b> Remote in the library. In the shipped milter the From parser guards this vector, so direct remote reachability is not established.<br>

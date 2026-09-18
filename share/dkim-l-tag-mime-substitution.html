@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
-<title>A signer that omits Content-Type from h= while using l= permits MIME-boundary substitution, so a dkim=pass message renders content the signer never authored (OpenDKIM ≤ 2.11.0)</title>
+<title>A signer that omits Content-Type from h= while using l= permits MIME-boundary substitution, so a dkim=pass message renders content the signer never authored (OpenDKIM ≤ 2.11.0; latest version tested 2026-07-30)</title>
 <style>
 :root { color-scheme: light dark; --fg:#111; --bg:#fff; --muted:#555; --rule:#ddd; --pre:#f5f5f5; --link:#14508c; }
 @media (prefers-color-scheme: dark) {
@@ -31,7 +31,7 @@ footer { margin-top: 3rem; padding-top: .8rem; border-top: 1px solid var(--rule)
 </head>
 <body>
 
-<h1>A signer that omits Content-Type from h= while using l= permits MIME-boundary substitution, so a dkim=pass message renders content the signer never authored (OpenDKIM ≤ 2.11.0)</h1>
+<h1>A signer that omits Content-Type from h= while using l= permits MIME-boundary substitution, so a dkim=pass message renders content the signer never authored (OpenDKIM ≤ 2.11.0; latest version tested 2026-07-30)</h1>
 
 <p class="hdr">
 <b>Author:</b> <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech &lt;weitongli@vt.edu&gt;<br>
@@ -39,7 +39,7 @@ footer { margin-top: 3rem; padding-top: .8rem; border-top: 1px solid var(--rule)
 <b>Vendor:</b> <a href="http://www.trusteddomain.org/">Not applicable - the DKIM verifier is specification-correct; the fix belongs with each signer</a><br>
 <b>Software:</b> <a href="http://www.opendkim.org/">OpenDKIM (verifier under test)</a><br>
 <b>Source code:</b> <a href="https://github.com/trusteddomainproject/OpenDKIM">https://github.com/trusteddomainproject/OpenDKIM</a><br>
-<b>Affected version:</b> OpenDKIM 2.11.0 (Debian package <code>2.11.0~beta2-9.1+b1</code>). The verifier behaviour is not version-specific: any conforming DKIM verifier returns the same result on this input. The header-duplication mapping in the notes was made against Postfix 3.7.11.<br>
+<b>Affected version:</b> OpenDKIM 2.11.0 (Debian package <code>2.11.0~beta2-9.1+b1</code>). The verifier behaviour is not version-specific: any conforming DKIM verifier returns the same result on this input. The header-duplication mapping in the notes was made against Postfix 3.7.11. Latest version tested on 2026-07-30.<br>
 <b>Vulnerable component:</b> DKIM signer policy — <code>h=</code> header-field selection combined with the <code>l=</code> body-length limit. The verifier path is not implicated.<br>
 <b>Vulnerability type:</b> CWE-345 (Insufficient Verification of Data Authenticity) at the composed-system level; no verifier defect<br>
 <b>Attack vector:</b> Remote. The attacker must be able to modify the message after signing, which means any hop on the delivery path, any mailing list or forwarder, or simply resending a copy of a signed message obtained from the signer.<br>

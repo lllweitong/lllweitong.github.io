@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
-<title>Postfix rewrites an over-long header line after the milter chain has stamped dkim=pass, so the trusted verdict covers bytes the recipient never receives (OpenDKIM &lt;= 2.11.0 and OpenDMARC &lt;= 1.4.2 and Postfix ≤ 3.10.12)</title>
+<title>Postfix rewrites an over-long header line after the milter chain has stamped dkim=pass, so the trusted verdict covers bytes the recipient never receives (OpenDKIM &lt;= 2.11.0 and OpenDMARC &lt;= 1.4.2 and Postfix ≤ 3.10.12; latest version tested 2026-07-30)</title>
 <style>
 :root { color-scheme: light dark; --fg:#111; --bg:#fff; --muted:#555; --rule:#ddd; --pre:#f5f5f5; --link:#14508c; }
 @media (prefers-color-scheme: dark) {
@@ -31,7 +31,7 @@ footer { margin-top: 3rem; padding-top: .8rem; border-top: 1px solid var(--rule)
 </head>
 <body>
 
-<h1>Postfix rewrites an over-long header line after the milter chain has stamped dkim=pass, so the trusted verdict covers bytes the recipient never receives (OpenDKIM &lt;= 2.11.0 and OpenDMARC &lt;= 1.4.2 and Postfix ≤ 3.10.12)</h1>
+<h1>Postfix rewrites an over-long header line after the milter chain has stamped dkim=pass, so the trusted verdict covers bytes the recipient never receives (OpenDKIM &lt;= 2.11.0 and OpenDMARC &lt;= 1.4.2 and Postfix ≤ 3.10.12; latest version tested 2026-07-30)</h1>
 
 <p class="hdr">
 <b>Author:</b> <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech &lt;weitongli@vt.edu&gt;<br>
@@ -39,7 +39,7 @@ footer { margin-top: 3rem; padding-top: .8rem; border-top: 1px solid var(--rule)
 <b>Vendor:</b> <a href="http://www.trusteddomain.org/">The Postfix project (Wietse Venema)</a><br>
 <b>Software:</b> <a href="http://www.opendkim.org/">Postfix, in a milter chain with OpenDKIM and OpenDMARC</a><br>
 <b>Source code:</b> <a href="https://github.com/vdukhovni/postfix">https://github.com/vdukhovni/postfix</a><br>
-<b>Affected version:</b> Postfix 3.10.12 in a milter chain with OpenDKIM 2.11.0 and OpenDMARC 1.4.2. The finding was originally isolated on Postfix 3.7.11. The defect is one of pipeline ordering rather than of any single component's own logic.<br>
+<b>Affected version:</b> Postfix 3.10.12 in a milter chain with OpenDKIM 2.11.0 and OpenDMARC 1.4.2. The finding was originally isolated on Postfix 3.7.11. The defect is one of pipeline ordering rather than of any single component's own logic. Latest version tested on 2026-07-30.<br>
 <b>Vulnerable component:</b> Milter pipeline ordering — the interaction between <code>smtp_line_length_limit</code> line rewriting and milter-time DKIM verification<br>
 <b>Vulnerability type:</b> CWE-367 (Time-of-check Time-of-use (TOCTOU) Race Condition)<br>
 <b>Attack vector:</b> Remote, unauthenticated, but with an abnormal precondition: the message must carry a single header line longer than 998 octets. Above approximately 2048 octets the milter rejects the message with 550, so the usable window is bounded.<br>

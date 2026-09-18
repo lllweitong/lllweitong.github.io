@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
-<title>Rspamd and dkimpy do not enforce the DKIM key record&#x27;s t=s strict flag, so a subdomain AUID is accepted against a key locked to its exact domain (Rspamd &lt;= 4.1.2 and dkimpy ≤ 1.1.8)</title>
+<title>Rspamd and dkimpy do not enforce the DKIM key record&#x27;s t=s strict flag, so a subdomain AUID is accepted against a key locked to its exact domain (Rspamd &lt;= 4.1.2 and dkimpy ≤ 1.1.8; latest version tested 2026-07-30)</title>
 <style>
 :root { color-scheme: light dark; --fg:#111; --bg:#fff; --muted:#555; --rule:#ddd; --pre:#f5f5f5; --link:#14508c; }
 @media (prefers-color-scheme: dark) {
@@ -31,7 +31,7 @@ footer { margin-top: 3rem; padding-top: .8rem; border-top: 1px solid var(--rule)
 </head>
 <body>
 
-<h1>Rspamd and dkimpy do not enforce the DKIM key record's t=s strict flag, so a subdomain AUID is accepted against a key locked to its exact domain (Rspamd &lt;= 4.1.2 and dkimpy ≤ 1.1.8)</h1>
+<h1>Rspamd and dkimpy do not enforce the DKIM key record's t=s strict flag, so a subdomain AUID is accepted against a key locked to its exact domain (Rspamd &lt;= 4.1.2 and dkimpy ≤ 1.1.8; latest version tested 2026-07-30)</h1>
 
 <p class="hdr">
 <b>Author:</b> <a href="https://weitongli.com/">Weitong Li</a>, Virginia Tech &lt;weitongli@vt.edu&gt;<br>
@@ -39,7 +39,7 @@ footer { margin-top: 3rem; padding-top: .8rem; border-top: 1px solid var(--rule)
 <b>Vendor:</b> <a href="https://rspamd.com/">Rspamd project (Vsevolod Stakhov) and the dkimpy maintainers (Scott Kitterman et al.)</a><br>
 <b>Software:</b> <a href="https://github.com/rspamd/rspamd">Rspamd and dkimpy</a><br>
 <b>Source code:</b> <a href="https://github.com/rspamd/rspamd">https://github.com/rspamd/rspamd</a><br>
-<b>Affected version:</b> Rspamd 4.1.2. Originally isolated on 3.10.2 and re-confirmed on 4.1.2 on 2026-07-28. dkimpy 1.1.8. OpenDKIM 2.11.0 enforces the flag correctly.<br>
+<b>Affected version:</b> Rspamd 4.1.2. Originally isolated on 3.10.2 and re-confirmed on 4.1.2 on 2026-07-28. dkimpy 1.1.8. OpenDKIM 2.11.0 enforces the flag correctly. Latest version tested on 2026-07-30.<br>
 <b>Vulnerable component:</b> DKIM public-key record handling — the <code>s</code> (strict) value of the <code>t=</code> flags tag in RFC 6376 section 3.6.1<br>
 <b>Vulnerability type:</b> CWE-347 (Improper Verification of Cryptographic Signature) / CWE-20 (Improper Input Validation)<br>
 <b>Attack vector:</b> Remote. The victim key record must publish <code>t=s</code>, and the attacker must be able to produce a signature under that key carrying a subdomain AUID.<br>
